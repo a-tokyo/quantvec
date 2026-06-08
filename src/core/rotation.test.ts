@@ -214,3 +214,41 @@ describe('createDenseRotation — Beta-marginal property', () => {
     });
   }
 });
+
+describe('createDenseRotation — Haar-ness across seeds (fixed canonical input)', () => {
+  // The test above feeds an already-uniform random unit vector and so checks the
+  // *input* sphere, not Q itself: any orthonormal Q would pass. To genuinely
+  // exercise that Q is Haar-distributed (uniform on O(d)), feed a FIXED canonical
+  // input e0 = [1,0,…] through Q built from MANY different seeds. For a Haar Q,
+  // Q·e0 is its first column — a uniformly random unit vector — so its first
+  // coordinate (Q[0,0]) has mean 0 and variance 1/d. A biased / non-uniform
+  // construction would skew this sample variance away from 1/d.
+  for (const d of [16, 64]) {
+    it(`Q·e0 first coordinate has sample variance ≈ 1/d for d=${d}`, { timeout: 30_000 }, () => {
+      const e0 = new Float32Array(d);
+      e0[0] = 1;
+      const y = new Float32Array(d);
+      // Each sample builds a fresh O(d³) QR; 2000 seeds is ample for a 1/d
+      // variance estimate at the 15% tolerance below (SE ≈ √(2/samples)·(1/d)).
+      const samples = 2000;
+      let sum = 0;
+      let sumSq = 0;
+      let unitErr = 0;
+      for (let seed = 0; seed < samples; seed++) {
+        const r = createDenseRotation(d, seed);
+        r.apply(e0, y);
+        const c = y[0]!;
+        sum += c;
+        sumSq += c * c;
+        // Q·e0 must itself be a unit vector (Q orthonormal).
+        unitErr = Math.max(unitErr, Math.abs(norm(y) - 1));
+      }
+      const mean = sum / samples;
+      const variance = sumSq / samples - mean * mean;
+      const expected = 1 / d;
+      expect(unitErr).toBeLessThan(1e-3);
+      expect(Math.abs(mean)).toBeLessThan(0.05);
+      expect(Math.abs(variance - expected)).toBeLessThan(0.15 * expected);
+    });
+  }
+});
