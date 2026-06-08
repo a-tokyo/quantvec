@@ -1,0 +1,12 @@
+dist
+build
+coverage
+node_modules
+local
+.agents
+benchmarks/datasets
+bun.lock
+bun.lockb
+*.wasm
+*.wat
+*.pdf

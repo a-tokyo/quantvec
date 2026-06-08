@@ -1,0 +1,20 @@
+{
+  "targets": {
+    "release": {
+      "outFile": "build/quantvec.wasm",
+      "textFile": "build/quantvec.wat",
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "noAssert": true
+    },
+    "debug": {
+      "outFile": "build/quantvec.debug.wasm",
+      "sourceMap": true
+    }
+  },
+  "options": {
+    "enable": ["simd"],
+    "exportRuntime": false,
+    "bindings": "esm"
+  }
+}

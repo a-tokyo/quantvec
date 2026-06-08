@@ -1,0 +1,23 @@
+quantvec
+Copyright 2026 Ahmed Tokyo
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License in the LICENSE file in this repository
+or at http://www.apache.org/licenses/LICENSE-2.0.
+
+------------------------------------------------------------------------------
+
+This product is a clean-room implementation, written solely from the following
+published research papers and its authors' own design:
+
+  - "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
+    Amir Zandieh, Majid Daliri, Majid Hadian, Vahab Mirrokni (Google Research)
+    arXiv:2504.19874 — https://arxiv.org/abs/2504.19874
+
+  - "RaBitQ: Quantizing High-Dimensional Vectors with a Theoretical Error Bound
+    for Approximate Nearest Neighbor Search"
+    arXiv:2405.12497 — https://arxiv.org/abs/2405.12497 (SIGMOD 2024)
+
+quantvec is not affiliated with, sponsored by, or endorsed by Google or the
+authors of the above works. "TurboQuant" and "RaBitQ" are used only to credit
+the algorithms whose published descriptions this software implements.

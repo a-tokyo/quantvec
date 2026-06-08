@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Build output
+dist/
+build/
+*.wasm
+*.wasm.map
+*.tsbuildinfo
+
+# Coverage / test
+coverage/
+.vitest/
+
+# Benchmark datasets (downloaded, large — not committed)
+benchmarks/datasets/
+
+# Papers kept locally for study; re-downloadable, so not committed (distilled notes are)
+docs/research/*.pdf
+
+# Autoresearch artifacts (the kept git commits are the durable record)
+autoresearch.md
+autoresearch.jsonl
+autoresearch.ideas.md
+results.tsv
+run.log
+
+# Git worktrees (parallel doer workspaces)
+.worktrees/
+
+# Local reference / scratch — NOT part of this project
+local/
+
+# Editor / OS
+.DS_Store
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json

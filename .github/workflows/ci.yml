@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Typecheck · Lint · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run format:check
+      - run: bun run build:wasm
+      - run: bun run build
+      # Artifact must load under Node (ESM + CJS) and Bun — the isomorphism gate.
+      - name: Smoke (Node ESM)
+        run: node -e "import('./dist/index.js').then(m => { if (typeof m.VERSION !== 'string') process.exit(1); console.log('node esm ok', m.VERSION); })"
+      - name: Smoke (Node CJS)
+        run: node -e "const m = require('./dist/index.cjs'); if (typeof m.VERSION !== 'string') process.exit(1); console.log('node cjs ok', m.VERSION);"
+      - name: Smoke (Bun ESM)
+        run: bun -e "import('./dist/index.js').then(m => { if (typeof m.VERSION !== 'string') process.exit(1); console.log('bun esm ok', m.VERSION); })"
+
+  test:
+    name: Test (vitest + coverage)
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run test:coverage
