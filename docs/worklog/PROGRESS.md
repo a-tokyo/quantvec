@@ -1,7 +1,7 @@
 # quantvec — Progress
 
 > Durable, in-repo progress tracker. Any session resumes from here + `.agents/plans/quantvec-build-plan.md`.
-> **Resume-here pointer:** Wave 2 merged to `main` (`cd5ecca`). Next: **Wave 3** — `encode` pipeline (normalize → rotate → calibrate → Lloyd-Max quantize → bit-pack → RaBitQ scale).
+> **Resume-here pointer:** Wave 3 merged to `main` (`44e065f`). Next: **Wave 4** — `search` (per-query nibble-LUT scalar kernel + metrics + mask) — the end-to-end recall milestone (recall@k vs exact brute force).
 
 Last updated: 2026-06-08
 
@@ -19,8 +19,8 @@ Toolchain (Bun + Vitest + tsup + AssemblyScript), strict TS 6 / ESLint 10 / Pret
 | ---- | ---------------------------------------------------------------------------------- | ------ |
 | W1   | core: `rng`, `topk`, `beta`, `integrate`                                           | DONE   |
 | W2   | core: `rotation` (dense Householder-QR), `codebook` (Lloyd-Max)                    | DONE   |
-| W3   | core: `encode` (normalize→rotate→calibrate→quantize→pack→scale)                    | WIP    |
-| W4   | core: `search` (nibble-LUT scalar kernel = correctness oracle)                     | TODO   |
+| W3   | core: `encode` (RaBitQ-corrected pipeline), `pack` (2/3/4-bit)                     | DONE   |
+| W4   | core: `search` (nibble-LUT scalar kernel = oracle), `metrics` (dot/cosine/euclid)  | WIP    |
 | W5   | `index/turboquant-index`, `index/id-map-index`, `io/serialize` (validated)         | TODO   |
 | W6   | `wasm` (AssemblyScript v128 kernel ≡ scalar), `ergonomic` (Collection/filter DSL)  | TODO   |
 | W7   | `benchmarks` (recall@k/QPS/compression vs reference) + README table + autoresearch | TODO   |
@@ -28,8 +28,9 @@ Toolchain (Bun + Vitest + tsup + AssemblyScript), strict TS 6 / ESLint 10 / Pret
 
 ### Done
 
-- **W1** (`e8a9b3d`): `rng` xoshiro256\*\*, `topk` min-heap (NaN-safe), `beta` (continued-fraction CDF/inverse/coord density), `integrate` sound adaptive-Simpson. One Critical (integrator hang) found+fixed.
-- **W2** (`cd5ecca`): `rotation` dense Householder-QR (verified vs numpy to f32; Beta-marginal checked), `codebook` Lloyd-Max (matches scipy to 7 digits; ~4×/bit distortion within Theorem-1 envelope; integrator safe to d=16384). Approved.
+- **W1** (`e8a9b3d`): `rng` xoshiro256\*\*, `topk` min-heap (NaN-safe), `beta` (CF CDF/inverse/coord density), `integrate` sound adaptive-Simpson. One Critical (integrator hang) fixed.
+- **W2** (`cd5ecca`): `rotation` dense Householder-QR (vs numpy to f32; Beta-marginal), `codebook` Lloyd-Max (vs scipy to 7 digits; ~4×/bit within Theorem-1 envelope).
+- **W3** (`44e065f`): `encode` (scale = norm/⟨o_rot,c⟩; unbiasedness verified, mean err ≤0.012·‖v‖, RMS halves/bit), `pack` (tight 2/3/4-bit, round-trip). Review found one unreachable guard → removed (no-tech-debt rule).
 
 ## Validation oracle (clean-room)
 
@@ -40,9 +41,10 @@ Toolchain (Bun + Vitest + tsup + AssemblyScript), strict TS 6 / ESLint 10 / Pret
 
 ## Process notes
 
-- Per-wave: combined spec + code-quality SDD review by an independent subagent; orchestrator verifies the gate itself before merge. Full 3-member doer/verifier/devil's-advocate **panel** reserved for W4 (core-algorithm milestone) and W8.
+- **No tech debt / no backwards-compat / greenfield** (D-009): every line reachable + tested or removed; reviewers enforce.
+- Per-wave: combined spec + code-quality SDD review by an independent subagent; orchestrator verifies the gate itself before merge. Full 3-member doer/verifier/devil's-advocate **panel** reserved for W8 (final). The W4 end-to-end recall benchmark is itself the core-algorithm correctness oracle.
 - Coverage gate 90% (`all: true`) in `vitest.config.ts` + CI.
-- Minor tech-debt (non-blocking): `rotation.test.ts` Beta-marginal test feeds already-Haar input so it under-exercises Q's Haar-ness (orthonormality is covered by QᵀQ≈I); strengthen when convenient.
+- W4 will also strengthen the W2 `rotation.test.ts` Haar test (feed fixed input across seeds) — clears the last test-strength note.
 
 ## Open items / risks (see plan premortem)
 

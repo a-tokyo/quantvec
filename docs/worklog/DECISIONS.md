@@ -2,6 +2,20 @@
 
 Concise record of locked decisions and their rationale. Newest first.
 
+## D-010 · Single clean serialization format — no backwards-compat
+
+This is a greenfield project: no released format exists, so the binary index format
+ships as ONE clean versioned layout (magic + version byte for future-proofing) with
+NO migration/back-compat branches for older versions. If the format ever changes
+pre-1.0 we bump and rewrite, not maintain legacy readers.
+
+## D-009 · No tech debt, no backwards-compat, no dead guards (user rule)
+
+Everything is built from scratch, so we never accumulate debt: no TODO/defer notes,
+no speculative backwards-compat, no unreachable "defensive" branches kept just in
+case. Every line must be reachable and tested, or removed. Reviewers enforce this;
+e.g. the W3 `inner<0` clamp was provably unreachable and untested → removed, not kept.
+
 ## D-008 · noUncheckedIndexedAccess = false
 
 Core is numeric typed-array hot-loop code; the flag would force `| undefined` on every
