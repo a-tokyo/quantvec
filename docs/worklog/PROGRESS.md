@@ -1,7 +1,7 @@
 # quantvec — Progress
 
 > Durable, in-repo progress tracker. Any session resumes from here + `.agents/plans/quantvec-build-plan.md`.
-> **Resume-here pointer:** Wave 1 merged to `main` (`e8a9b3d`). Next: **Wave 2** — `rotation` + `codebook` via subagent-driven-development (implementer → review → verify gate → merge).
+> **Resume-here pointer:** Wave 2 merged to `main` (`cd5ecca`). Next: **Wave 3** — `encode` pipeline (normalize → rotate → calibrate → Lloyd-Max quantize → bit-pack → RaBitQ scale).
 
 Last updated: 2026-06-08
 
@@ -15,32 +15,34 @@ Toolchain (Bun + Vitest + tsup + AssemblyScript), strict TS 6 / ESLint 10 / Pret
 
 ## Implementation waves (subagent-driven-development; local gate green + reviewed → merge to main)
 
-| Wave | Modules                                                                                      | Status |
-| ---- | -------------------------------------------------------------------------------------------- | ------ |
-| W1   | core: `rng`, `topk`, `beta`, `integrate`                                                     | DONE   |
-| W2   | core: `rotation` (dense Householder-QR; FWHT-fast as perf follow-up), `codebook` (Lloyd-Max) | WIP    |
-| W3   | core: `encode` (normalize→rotate→calibrate→quantize→pack→scale)                              | TODO   |
-| W4   | core: `search` (nibble-LUT scalar kernel = correctness oracle)                               | TODO   |
-| W5   | `index/turboquant-index`, `index/id-map-index`, `io/serialize` (validated)                   | TODO   |
-| W6   | `wasm` (AssemblyScript v128 kernel ≡ scalar), `ergonomic` (Collection/filter DSL)            | TODO   |
-| W7   | `benchmarks` (recall@k/QPS/compression vs reference) + README table + autoresearch           | TODO   |
-| W8   | doer/verifier/devil's-advocate panel, security review, v0.1.0 release                        | TODO   |
+| Wave | Modules                                                                            | Status |
+| ---- | ---------------------------------------------------------------------------------- | ------ |
+| W1   | core: `rng`, `topk`, `beta`, `integrate`                                           | DONE   |
+| W2   | core: `rotation` (dense Householder-QR), `codebook` (Lloyd-Max)                    | DONE   |
+| W3   | core: `encode` (normalize→rotate→calibrate→quantize→pack→scale)                    | WIP    |
+| W4   | core: `search` (nibble-LUT scalar kernel = correctness oracle)                     | TODO   |
+| W5   | `index/turboquant-index`, `index/id-map-index`, `io/serialize` (validated)         | TODO   |
+| W6   | `wasm` (AssemblyScript v128 kernel ≡ scalar), `ergonomic` (Collection/filter DSL)  | TODO   |
+| W7   | `benchmarks` (recall@k/QPS/compression vs reference) + README table + autoresearch | TODO   |
+| W8   | doer/verifier/devil's-advocate panel, security review, v0.1.0 release              | TODO   |
 
-### W1 — done (merged `e8a9b3d`)
+### Done
 
-- `rng` xoshiro256\*\* (deterministic, golden-vector tested), `topk` size-k min-heap (NaN-safe), `beta` (continued-fraction CDF, inverse-CDF, coordinate density), `integrate` sound terminating adaptive-Simpson (fail-fast on non-finite, spike-aware). Coverage 97% stmt / 92% br / 100% fn / 99% ln. Spec + code-quality reviewed; one Critical (integrator hang) fixed.
+- **W1** (`e8a9b3d`): `rng` xoshiro256\*\*, `topk` min-heap (NaN-safe), `beta` (continued-fraction CDF/inverse/coord density), `integrate` sound adaptive-Simpson. One Critical (integrator hang) found+fixed.
+- **W2** (`cd5ecca`): `rotation` dense Householder-QR (verified vs numpy to f32; Beta-marginal checked), `codebook` Lloyd-Max (matches scipy to 7 digits; ~4×/bit distortion within Theorem-1 envelope; integrator safe to d=16384). Approved.
 
 ## Validation oracle (clean-room)
 
 1. Paper distortion bounds: D_mse ≤ (√3π/2)·4^−b ≈ {0.36, 0.117, 0.030, 0.009} for b=1..4.
-2. Independent scipy reference for Beta Lloyd-Max codebooks (embedded constants — node-free tests).
+2. Independent scipy reference for Beta/Lloyd-Max (embedded constants — node-free tests).
 3. Exact brute-force float32 search = recall ground truth; target recall@10 > 90% at 2–4 bits.
 4. **W7 head-to-head vs the local reference library** (run both; recall parity / "ours better").
 
 ## Process notes
 
-- Per-wave: SDD two-stage review (spec → code-quality); orchestrator verifies the gate itself before merge. Full 3-member doer/verifier/devil's-advocate **panel** reserved for W8 (and the W4 core-algorithm milestone).
-- Coverage gate 90% (`all: true`) enforced in `vitest.config.ts` + CI.
+- Per-wave: combined spec + code-quality SDD review by an independent subagent; orchestrator verifies the gate itself before merge. Full 3-member doer/verifier/devil's-advocate **panel** reserved for W4 (core-algorithm milestone) and W8.
+- Coverage gate 90% (`all: true`) in `vitest.config.ts` + CI.
+- Minor tech-debt (non-blocking): `rotation.test.ts` Beta-marginal test feeds already-Haar input so it under-exercises Q's Haar-ness (orthonormality is covered by QᵀQ≈I); strengthen when convenient.
 
 ## Open items / risks (see plan premortem)
 
