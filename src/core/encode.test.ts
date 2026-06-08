@@ -153,6 +153,20 @@ describe('encodeVector — basic invariants', () => {
     expect(Array.from(a.codes)).toEqual(Array.from(b.codes));
     expect(a.scale).toBeCloseTo(b.scale, 10);
   });
+
+  it('reusing one scratch across interleaved encodes does not leak state', () => {
+    const rng = createRng(17);
+    const vA = randomVector(d, 2, rng);
+    const vB = randomVector(d, 5, rng);
+    const refA = encodeVector(vA, { dim: d, bits, rotation, codebook }); // pristine A
+    const scratch = createEncodeScratch(d);
+    encodeVector(vA, { dim: d, bits, rotation, codebook, scratch });
+    encodeVector(vB, { dim: d, bits, rotation, codebook, scratch }); // clobbers scratch
+    const againA = encodeVector(vA, { dim: d, bits, rotation, codebook, scratch });
+    // Re-encoding A after B reused the same scratch must equal the pristine A.
+    expect(Array.from(againA.codes)).toEqual(Array.from(refA.codes));
+    expect(againA.scale).toBeCloseTo(refA.scale, 10);
+  });
 });
 
 describe('scoreCodes', () => {
@@ -239,12 +253,12 @@ describe('encodeVector — UNBIASEDNESS (key)', () => {
         rms[bits] = Math.sqrt(sumSqErr / NUM_QUERIES);
       }
 
-      // Approximately unbiased: mean signed error is small relative to ‖v‖.
-      // (Each query has E[⟨q,v⟩]=0 with std ≈ ‖v‖/√d·‖q‖, so the empirical mean
-      // over 2000 queries has its own sampling noise; the bound below is the
-      // bias+noise budget.)
+      // Approximately unbiased: mean signed error is small relative to ‖v‖. The
+      // query stream is seeded (createRng(999)) so this mean is DETERMINISTIC (not
+      // flaky) — measured |meanErr|/‖v‖ ≤ 0.012, so a 0.02 bound is a sharp oracle
+      // that still catches any sign-level bias regression.
       for (const bits of [2, 3, 4] as const) {
-        expect(Math.abs(meanErr[bits]!)).toBeLessThan(0.05 * vNorm);
+        expect(Math.abs(meanErr[bits]!)).toBeLessThan(0.02 * vNorm);
       }
 
       // RMS is small relative to ‖v‖ and strictly decreases with more bits.

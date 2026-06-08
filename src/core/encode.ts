@@ -103,9 +103,6 @@ export function createEncodeScratch(dim: number): EncodeScratch {
   return { unit: new Float32Array(dim), rotated: new Float32Array(dim) };
 }
 
-/** A near-zero guard for the inner-product denominator (avoid blow-up / sign flip). */
-const INNER_EPSILON = 1e-12;
-
 function validateBits(bits: number): asserts bits is 2 | 3 | 4 {
   if (bits !== 2 && bits !== 3 && bits !== 4) {
     throw new EncodeError('INVALID_BITS', `bits must be one of {2, 3, 4}, got ${bits}`);
@@ -184,15 +181,15 @@ export function encodeVector(vec: Float32Array, opts: EncodeOptions): EncodedVec
     inner += rotated[i]! * centroids[code]!;
   }
 
-  // ── RaBitQ scale = norm / ⟨o_rot, c⟩, guarding a near-zero/negative inner ──
-  // inner is the projection of the (unit) true direction onto its own
-  // reconstruction; for any reasonable codebook it is positive and ≈ 1. If
-  // quantization collapses the direction (inner ≤ epsilon) the estimator is
-  // undefined — we clamp to the epsilon-floored magnitude to keep `scale` finite
-  // rather than emitting Inf/NaN (the per-vector error is then large but bounded).
-  const denom =
-    Math.abs(inner) < INNER_EPSILON ? (inner < 0 ? -INNER_EPSILON : INNER_EPSILON) : inner;
-  const scale = norm / denom;
+  // ── RaBitQ scale = norm / ⟨o_rot, c⟩ ─────────────────────────────────────
+  // `inner` is the projection of the unit direction o_rot onto its own
+  // reconstruction c. The codebook is symmetric with monotonically increasing
+  // centroids and its central decision boundary at 0, so quantizeCoord(x) returns
+  // a centroid with the same sign as x — every term o_rot[i]·c[i] ≥ 0, hence
+  // inner > 0 for a unit direction (empirically inner ∈ [0.55, 1.34]). No clamp
+  // branch is needed, and none would be reachable or testable (greenfield: no
+  // dead guards).
+  const scale = norm / inner;
 
   return { codes, scale, norm };
 }
