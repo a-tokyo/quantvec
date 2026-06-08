@@ -50,8 +50,16 @@ export class TopK {
     this.heapIndex = new Int32Array(k);
   }
 
-  /** Offer a (score, index) candidate. Kept only if among the top k so far. */
+  /**
+   * Offer a (score, index) candidate. Kept only if among the top k so far.
+   *
+   * NaN scores are ignored: `NaN` is unordered, so admitting it would corrupt
+   * the heap invariant (every comparison against it is false, so it would never
+   * be evicted) and leak `NaN` into results. A higher score is "better"; a
+   * candidate that cannot compare cannot be among the best, so we drop it.
+   */
   add(score: number, index: number): void {
+    if (Number.isNaN(score)) return;
     if (this.size < this.k) {
       // Heap not yet full: insert and sift up.
       let i = this.size++;

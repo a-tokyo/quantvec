@@ -117,6 +117,36 @@ describe('TopK', () => {
     }
   });
 
+  it('ignores NaN scores (never leaks NaN into results)', () => {
+    // NaN must not be admitted while the heap is still filling...
+    const t = new TopK(3);
+    t.add(NaN, 0);
+    t.add(5, 1);
+    t.add(NaN, 2);
+    t.add(3, 3);
+    t.add(4, 4);
+    t.add(NaN, 5);
+    const r = t.result();
+    expect(Array.from(r.scores)).toEqual([5, 4, 3]);
+    expect(Array.from(r.indices)).toEqual([1, 4, 3]);
+    for (const s of r.scores) expect(Number.isNaN(s)).toBe(false);
+
+    // ...nor once the heap is full (the old `score <= root` test was false for
+    // NaN, so NaN slipped past the eviction check).
+    const t2 = new TopK(2);
+    t2.add(10, 0);
+    t2.add(20, 1);
+    t2.add(NaN, 2);
+    const r2 = t2.result();
+    expect(Array.from(r2.scores)).toEqual([20, 10]);
+    expect(Array.from(r2.indices)).toEqual([1, 0]);
+
+    // All-NaN input yields an empty result, not a NaN-filled one.
+    const t3 = new TopK(3);
+    for (let i = 0; i < 5; i++) t3.add(NaN, i);
+    expect(t3.result().scores.length).toBe(0);
+  });
+
   it('result() is repeatable and non-destructive', () => {
     const t = new TopK(3);
     for (let i = 0; i < 20; i++) t.add(i, i);

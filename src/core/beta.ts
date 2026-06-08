@@ -14,6 +14,12 @@
 // incomplete beta via Lentz's modified continued fraction ("betai", Numerical
 // Recipes §6.4); inverse CDF by bracketed bisection with optional Newton
 // polishing.
+//
+// The numerical integrator used for conditional-mean integrals lives in
+// `./integrate` (so the codebook wave can import it directly); we re-export it
+// here for convenience and for existing call sites.
+
+export { adaptiveSimpson, IntegrationError } from './integrate';
 
 /** Discriminated, code-tagged error for the beta module. */
 export class BetaError extends Error {
@@ -171,7 +177,13 @@ export function betaQuantile(p: number, a: number, b: number): number {
   if (p === 0) return 0;
   if (p === 1) return 1;
 
-  // Bracket the root, then bisect to a tight tolerance.
+  // Two-stage solve: bisection to a safe bracket (robust, always converges),
+  // then Newton polishing for the final digits (quadratic, using the pdf as the
+  // derivative of the cdf). Bisecting to ~1e-12 keeps the bracket tight enough
+  // for full accuracy even for the awkward a<1 endpoint-divergent shapes while
+  // still leaving Newton work to do; if a Newton step escapes the bracket or
+  // stalls we fall back to a bisection step, so the result is always at least as
+  // accurate as bisection.
   let lo = 0;
   let hi = 1;
   for (let iter = 0; iter < 200; iter++) {
@@ -179,128 +191,29 @@ export function betaQuantile(p: number, a: number, b: number): number {
     const c = betaCdf(mid, a, b);
     if (c < p) lo = mid;
     else hi = mid;
-    if (hi - lo < 1e-15) break;
+    if (hi - lo < 1e-12) break;
   }
   let x = 0.5 * (lo + hi);
 
   // Newton polish (a few steps) using pdf as the derivative of cdf.
-  for (let iter = 0; iter < 8; iter++) {
+  for (let iter = 0; iter < 12; iter++) {
     const c = betaCdf(x, a, b);
     const d = betaPdf(x, a, b);
     if (!Number.isFinite(d) || d <= 0) break;
     const step = (c - p) / d;
     let nx = x - step;
-    // Keep inside the bracket; fall back to bisection bounds if Newton escapes.
+    // Keep inside the bracket; fall back to a bisection step if Newton escapes.
     if (!(nx > lo && nx < hi)) nx = 0.5 * (lo + hi);
     if (Math.abs(nx - x) < 1e-15) {
       x = nx;
       break;
     }
     x = nx;
-    // Tighten the bracket with the Newton result.
+    // Tighten the bracket with the Newton result (keeps the fallback safe).
     if (betaCdf(x, a, b) < p) lo = x;
     else hi = x;
   }
   return x;
-}
-
-// ---------------------------------------------------------------------------
-// Adaptive Simpson integration.
-// ---------------------------------------------------------------------------
-
-const SIMPSON_MAX_DEPTH = 50;
-
-/** Composite Simpson estimate over [a, b] given f at a, b, and the midpoint. */
-function simpson(a: number, b: number, fa: number, fb: number, fm: number): number {
-  return ((b - a) / 6) * (fa + 4 * fm + fb);
-}
-
-function adaptiveSimpsonRec(
-  f: (x: number) => number,
-  a: number,
-  b: number,
-  fa: number,
-  fb: number,
-  fm: number,
-  whole: number,
-  tol: number,
-  depth: number,
-): number {
-  const m = 0.5 * (a + b);
-  const lm = 0.5 * (a + m);
-  const rm = 0.5 * (m + b);
-  // Route interior samples through safeEval so an integrable singularity that
-  // happens to land on a sample point yields a large-but-finite value rather
-  // than ±∞ (which would propagate as Inf − Inf = NaN through `diff`).
-  const flm = safeEval(f, lm, m);
-  const frm = safeEval(f, rm, m);
-  const left = simpson(a, m, fa, fm, flm);
-  const right = simpson(m, b, fm, fb, frm);
-  const diff = left + right - whole;
-  if (depth <= 0 || Math.abs(diff) <= 15 * tol) {
-    // Richardson extrapolation correction term: diff / 15.
-    return left + right + diff / 15;
-  }
-  return (
-    adaptiveSimpsonRec(f, a, m, fa, fm, flm, left, tol / 2, depth - 1) +
-    adaptiveSimpsonRec(f, m, b, fm, fb, frm, right, tol / 2, depth - 1)
-  );
-}
-
-/** Initial number of equal panels the integrator subdivides [a, b] into. */
-const SIMPSON_INIT_PANELS = 16;
-
-/**
- * Evaluate f at x, nudging slightly inward toward `toward` if the result is
- * non-finite. This tolerates integrable endpoint singularities (e.g. the
- * Beta(a,a) density with a < 1, which is +∞ at the boundary but integrable),
- * which a closed Newton–Cotes rule would otherwise turn into NaN.
- */
-function safeEval(f: (x: number) => number, x: number, toward: number): number {
-  const v = f(x);
-  if (Number.isFinite(v)) return v;
-  // Step a tiny relative distance toward the interval's interior and retry.
-  for (let i = 1; i <= 8; i++) {
-    const nudged = x + (toward - x) * (1e-12 * Math.pow(10, i));
-    const nv = f(nudged);
-    if (Number.isFinite(nv)) return nv;
-  }
-  return 0;
-}
-
-/**
- * Recursive adaptive Simpson integration of f over [a, b] to absolute
- * tolerance `tol`.
- *
- * The interval is first split into a fixed number of equal panels so that
- * sharply concentrated integrands (e.g. the Beta(a,a) density for large a,
- * which is nearly a spike at the midpoint) are sampled before the per-panel
- * adaptive refinement decides it has converged. Non-finite endpoint values are
- * handled by {@link safeEval}, so integrable boundary singularities are
- * tolerated.
- */
-export function adaptiveSimpson(
-  f: (x: number) => number,
-  a: number,
-  b: number,
-  tol: number,
-): number {
-  if (a === b) return 0;
-  const panels = SIMPSON_INIT_PANELS;
-  const h = (b - a) / panels;
-  const panelTol = tol / panels;
-  let total = 0;
-  for (let p = 0; p < panels; p++) {
-    const pa = a + p * h;
-    const pb = p === panels - 1 ? b : pa + h;
-    const pm = 0.5 * (pa + pb);
-    const fa = safeEval(f, pa, pm);
-    const fb = safeEval(f, pb, pm);
-    const fm = f(pm);
-    const whole = simpson(pa, pb, fa, fb, fm);
-    total += adaptiveSimpsonRec(f, pa, pb, fa, fb, fm, whole, panelTol, SIMPSON_MAX_DEPTH);
-  }
-  return total;
 }
 
 // ---------------------------------------------------------------------------

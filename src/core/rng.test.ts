@@ -31,6 +31,49 @@ describe('createRng', () => {
     }
   });
 
+  it('matches a hardcoded golden vector (locks the bit-exact stream)', () => {
+    // Known-answer test. These constants were independently reproduced from the
+    // published xoshiro256** + SplitMix64 reference (https://prng.di.unimi.it/),
+    // NOT snapshotted blindly from this module — so a future refactor that
+    // silently alters the stream (seeding, rotation, output word) will fail here.
+    const golden42 = [
+      360188718, 1627707782, 2920764210, 3971525959, 4259765375, 3306005809, 3089192069, 3650758467,
+    ];
+    const r = createRng(42);
+    for (const expected of golden42) {
+      expect(r.nextU32()).toBe(expected);
+    }
+
+    // A second seed, supplied as a bigint, pinning the 64-bit path too.
+    const goldenBig = [
+      4164784269, 692000174, 2390434984, 1948683672, 1805871221, 546424444, 1456522348, 1035992171,
+    ];
+    const rb = createRng(0x1234567890abcdefn);
+    for (const expected of goldenBig) {
+      expect(rb.nextU32()).toBe(expected);
+    }
+  });
+
+  it('rejects a non-finite numeric seed with a typed error', () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      let err: unknown;
+      try {
+        createRng(bad);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect((err as { code?: string }).code).toBe('INVALID_SEED');
+      expect((err as Error).name).toBe('RngError');
+    }
+  });
+
+  it('truncates a fractional numeric seed (equals its integer part)', () => {
+    const a = createRng(123.99);
+    const b = createRng(123);
+    for (let i = 0; i < 16; i++) expect(a.nextU32()).toBe(b.nextU32());
+  });
+
   it('produces different sequences for different seeds', () => {
     const a = createRng(1);
     const b = createRng(2);
