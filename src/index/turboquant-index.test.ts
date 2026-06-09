@@ -232,6 +232,18 @@ describe('TurboQuantIndex — serialization', () => {
     expect(restored.size).toBe(0);
   });
 
+  it('does not preserve fastscan: a deserialized index falls back to the exact path', () => {
+    const idx = new TurboQuantIndex({ dim: DIM, bits: 4, fastscan: true });
+    idx.add(ORTHO);
+    expect(idx.fastscan).toBe(true);
+    const restored = TurboQuantIndex.fromBytes(idx.toBytes());
+    expect(restored.fastscan).toBe(false);
+    // search still works correctly via the exact path
+    for (let i = 0; i < ORTHO.length; i++) {
+      expect(restored.search(ORTHO[i]!, 1).indices[0]).toBe(idx.search(ORTHO[i]!, 1).indices[0]);
+    }
+  });
+
   it('rejects an id-keyed buffer with WRONG_KIND', () => {
     const idmap = new IdMapIndex({ dim: DIM });
     idmap.addWithIds([1], [ORTHO[0]!]);

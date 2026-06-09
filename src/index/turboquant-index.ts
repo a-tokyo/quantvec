@@ -253,6 +253,16 @@ export class TurboQuantIndex {
     return this.#calibration !== undefined;
   }
 
+  /**
+   * Whether the v128 FastScan candidate-pool path is active for this index. This is a
+   * perf-hint constructor option (and requires `bits === 4`) — it is not part of the
+   * serialized payload, so a deserialized index always has `fastscan === false` and
+   * falls back to the exact scoring path.
+   */
+  get fastscan(): boolean {
+    return this.#fastscan;
+  }
+
   /** Current backing capacity (number of slots before the next growth). */
   get #capacity(): number {
     return this.#scales.length;

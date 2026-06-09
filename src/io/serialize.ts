@@ -41,7 +41,8 @@ export class DeserializeError extends Error {
     | 'BAD_DIM'
     | 'BAD_SEED'
     | 'BAD_LENGTH'
-    | 'BAD_ID';
+    | 'BAD_ID'
+    | 'BAD_CALIBRATION';
   constructor(code: DeserializeError['code'], message: string) {
     super(message);
     this.name = 'DeserializeError';
@@ -319,6 +320,17 @@ export function deserializeIndex(bytes: Uint8Array): DeserializedIndex {
     for (let i = 0; i < dim; i++) {
       scale[i] = dv.getFloat32(off, true);
       off += FLOAT_BYTES;
+    }
+    // scale is a divisor in the search-time calibration dual (../core/search,
+    // ../index/turboquant-index #searchFastScan): a zero or non-finite entry would
+    // turn into Infinity/NaN scores. Validate untrusted input up front.
+    for (let i = 0; i < dim; i++) {
+      if (!Number.isFinite(shift[i]!) || !Number.isFinite(scale[i]!) || scale[i] === 0) {
+        throw new DeserializeError(
+          'BAD_CALIBRATION',
+          `calibration coordinate ${i} has invalid shift/scale (${shift[i]}/${scale[i]})`,
+        );
+      }
     }
     calibration = { shift, scale };
   } else if (caliFlag !== 0) {

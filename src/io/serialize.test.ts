@@ -282,6 +282,25 @@ describe('serialize/deserialize — TQ+ calibration round trip', () => {
     );
     expect(parsed.calibration).toBeUndefined();
   });
+
+  it('rejects a calibration with a zero scale (would divide by zero at search time)', () => {
+    const cal = { shift: new Float32Array(DIM).fill(0.1), scale: new Float32Array(DIM).fill(1.2) };
+    const b = serializeIndex({ kind: 'positional', ...positionalPayload(2), calibration: cal });
+    // Layout: fixedEnd | 1 flag byte | DIM shift floats | DIM scale floats | ids...
+    const scaleStart = fixedEnd(2) + 1 + DIM * 4;
+    const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    view.setFloat32(scaleStart, 0, true); // scale[0] = 0
+    expectDeserializeError(b, 'BAD_CALIBRATION');
+  });
+
+  it('rejects a calibration with a non-finite shift/scale', () => {
+    const cal = { shift: new Float32Array(DIM).fill(0.1), scale: new Float32Array(DIM).fill(1.2) };
+    const b = serializeIndex({ kind: 'positional', ...positionalPayload(2), calibration: cal });
+    const shiftStart = fixedEnd(2) + 1;
+    const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    view.setFloat32(shiftStart, NaN, true); // shift[0] = NaN
+    expectDeserializeError(b, 'BAD_CALIBRATION');
+  });
 });
 
 describe('serialize — input typing', () => {

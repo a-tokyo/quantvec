@@ -32,18 +32,38 @@ function compileCondition<Id extends IdType>(cond: Condition<Id>): FilterPredica
   }
   if ('range' in cond) {
     const { key, range } = cond as RangeCondition;
+    const { gt, gte, lt, lte } = range;
+    if (gt === undefined && gte === undefined && lt === undefined && lte === undefined) {
+      throw new FilterError(`range condition for "${key}" must specify gt, gte, lt, or lte`);
+    }
+    // An impossible bound (e.g. {gt: 10, lt: 5}, or {gte: 10, lt: 10}) would silently
+    // match nothing — almost certainly a mistake, so reject it at compile time.
+    const lo = gt ?? gte;
+    const hi = lt ?? lte;
+    if (lo !== undefined && hi !== undefined) {
+      const exclusive = gt !== undefined || lt !== undefined;
+      if (lo > hi || (lo === hi && exclusive)) {
+        throw new FilterError(
+          `range condition for "${key}" can never match: ${JSON.stringify(range)}`,
+        );
+      }
+    }
     return (_id, payload) => {
       const x = payloadValue(payload, key);
       if (typeof x !== 'number') return false;
-      if (range.gt !== undefined && !(x > range.gt)) return false;
-      if (range.gte !== undefined && !(x >= range.gte)) return false;
-      if (range.lt !== undefined && !(x < range.lt)) return false;
-      if (range.lte !== undefined && !(x <= range.lte)) return false;
+      if (gt !== undefined && !(x > gt)) return false;
+      if (gte !== undefined && !(x >= gte)) return false;
+      if (lt !== undefined && !(x < lt)) return false;
+      if (lte !== undefined && !(x <= lte)) return false;
       return true;
     };
   }
   if ('hasId' in cond) {
-    const set = new Set<IdType>((cond as HasIdCondition<Id>).hasId);
+    const ids = (cond as HasIdCondition<Id>).hasId;
+    if (ids.length === 0) {
+      throw new FilterError('hasId condition must not be empty (would match nothing)');
+    }
+    const set = new Set<IdType>(ids);
     return (id) => set.has(id);
   }
   if ('must' in cond || 'should' in cond || 'must_not' in cond) {

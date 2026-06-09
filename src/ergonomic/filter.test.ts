@@ -35,6 +35,44 @@ describe('compileFilter — leaf conditions', () => {
     expect(compileFilter(f)(5, {})).toBe(true);
     expect(compileFilter(f)(2, {})).toBe(false);
   });
+
+  it('rejects an empty hasId array', () => {
+    let err: unknown;
+    try {
+      compileFilter({ must: [{ hasId: [] }] });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FilterError);
+    expect((err as FilterError).code).toBe('INVALID_CONDITION');
+  });
+
+  it('rejects a range condition with no bounds', () => {
+    let err: unknown;
+    try {
+      compileFilter({ must: [{ key: 'year', range: {} }] });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FilterError);
+    expect((err as FilterError).code).toBe('INVALID_CONDITION');
+  });
+
+  it('rejects an impossible range (gt >= lt)', () => {
+    expect(() => compileFilter({ must: [{ key: 'year', range: { gt: 10, lt: 5 } }] })).toThrow(
+      FilterError,
+    );
+    expect(() => compileFilter({ must: [{ key: 'year', range: { gte: 10, lt: 10 } }] })).toThrow(
+      FilterError,
+    );
+    expect(() => compileFilter({ must: [{ key: 'year', range: { gt: 10, lte: 10 } }] })).toThrow(
+      FilterError,
+    );
+    // gte/lte equal is fine: matches exactly that value
+    expect(() =>
+      compileFilter({ must: [{ key: 'year', range: { gte: 10, lte: 10 } }] }),
+    ).not.toThrow();
+  });
 });
 
 describe('compileFilter — boolean combination', () => {
