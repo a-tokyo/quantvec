@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next'
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://quantvec.vercel.app'
 
-// Doc routes (mirror of scripts/sync-docs.mjs + the authored overview). Keep in sync
-// when adding/removing docs.
+// Doc routes (mirror docs/*.md at repo root + the authored overview). Keep in sync when
+// adding/removing docs.
 const DOC_ROUTES = [
   'getting-started',
   'guide',

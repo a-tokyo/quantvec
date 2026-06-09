@@ -9,16 +9,16 @@ only the compact per-vector data (and, for the id-keyed index, the ids) is store
 
 All multi-byte fields are little-endian. The header is 24 bytes:
 
-| Offset | Size | Field | Notes |
-| ------ | ---- | ----- | ----- |
-| 0      | 4    | magic | `"QVEC"` (`0x51 0x56 0x45 0x43`) |
-| 4      | 1    | version | `1` |
-| 5      | 1    | kind | `0` = positional, `1` = id-keyed |
-| 6      | 1    | metric | `0` = dot, `1` = cosine, `2` = euclidean |
-| 7      | 1    | bits | `2`, `3`, or `4` |
-| 8      | 4    | dim | u32, positive multiple of 8 |
-| 12     | 4    | n | u32, live vector count |
-| 16     | 8    | seed | f64, RNG seed of the rotation |
+| Offset | Size | Field   | Notes                                    |
+| ------ | ---- | ------- | ---------------------------------------- |
+| 0      | 4    | magic   | `"QVEC"` (`0x51 0x56 0x45 0x43`)         |
+| 4      | 1    | version | `1`                                      |
+| 5      | 1    | kind    | `0` = positional, `1` = id-keyed         |
+| 6      | 1    | metric  | `0` = dot, `1` = cosine, `2` = euclidean |
+| 7      | 1    | bits    | `2`, `3`, or `4`                         |
+| 8      | 4    | dim     | u32, positive multiple of 8              |
+| 12     | 4    | n       | u32, live vector count                   |
+| 16     | 8    | seed    | f64, RNG seed of the rotation            |
 
 Body, immediately after the header:
 
@@ -35,10 +35,10 @@ float32 (on par with native TurboQuant implementations).
 
 Each id is `tag (u8)` then payload:
 
-| tag | type | payload |
-| --- | ---- | ------- |
-| 0   | number | f64 |
-| 1   | string | u32 length + UTF-8 bytes |
+| tag | type   | payload                                            |
+| --- | ------ | -------------------------------------------------- |
+| 0   | number | f64                                                |
+| 1   | string | u32 length + UTF-8 bytes                           |
 | 2   | bigint | u32 length + UTF-8 of the canonical decimal string |
 
 ## Untrusted-input hardening
@@ -62,4 +62,4 @@ structural problem throws a `DeserializeError` with a specific `.code`
 
 - The id type is **not** stored; pass it to `IdMapIndex.fromBytes<Id>` and ensure it matches.
 - The on-disk `codes` section is bit-packed; the index still holds one byte per code in memory.
-  In-memory packing (and a SIMD scan over packed codes) is on the [roadmap](/docs/roadmap).
+  In-memory packing (and a SIMD scan over packed codes) is on the [roadmap](roadmap.md).

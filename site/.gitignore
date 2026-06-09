@@ -7,6 +7,9 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
+# Copied from repo-root docs/*.md via scripts/copy-docs.mjs (canonical source is not here).
+content/docs/*.md
+
 # Editor / OS
 .DS_Store
 *.log

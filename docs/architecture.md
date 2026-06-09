@@ -58,19 +58,19 @@ a bounded min-heap. This pure-TypeScript scalar kernel is the **correctness orac
 
 ## Module map
 
-| Module | Responsibility |
-| ------ | -------------- |
-| `core/rng`, `core/rotation`, `core/fwht` | seeded RNG, rotation (Householder QR, or FWHT for power-of-two dims) |
-| `core/beta`, `core/codebook` | Beta pdf/cdf/quantile, Lloyd-Max codebooks per `(dim, bits)` |
-| `core/encode`, `core/pack`, `core/calibrate` | normalize→rotate→(TQ+)→quantize→scale; bit-pack; calibration fit |
-| `core/search`, `core/topk`, `core/metrics` | nibble-LUT scan, bounded heap, distance math |
-| `wasm/kernel` + `assembly/` | WASM kernels: exact f64 scoreInto (bit-identical to scalar oracle) + v128 FastScan (blocked-nibble swizzle + rescore) |
-| `ergonomic/collection`, `ergonomic/filter` | `createCollection`, `Collection<P>`, `must`/`should`/`must_not` filter DSL |
-| `index/turboquant-index` | growable positional flat index |
-| `index/id-map-index` | stable id↔slot layer |
-| `io/serialize` | versioned `QVEC` (de)serialization (see [Serialization Format](/docs/serialization)) |
+| Module                                       | Responsibility                                                                                                        |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `core/rng`, `core/rotation`, `core/fwht`     | seeded RNG, rotation (Householder QR, or FWHT for power-of-two dims)                                                  |
+| `core/beta`, `core/codebook`                 | Beta pdf/cdf/quantile, Lloyd-Max codebooks per `(dim, bits)`                                                          |
+| `core/encode`, `core/pack`, `core/calibrate` | normalize→rotate→(TQ+)→quantize→scale; bit-pack; calibration fit                                                      |
+| `core/search`, `core/topk`, `core/metrics`   | nibble-LUT scan, bounded heap, distance math                                                                          |
+| `wasm/kernel` + `assembly/`                  | WASM kernels: exact f64 scoreInto (bit-identical to scalar oracle) + v128 FastScan (blocked-nibble swizzle + rescore) |
+| `ergonomic/collection`, `ergonomic/filter`   | `createCollection`, `Collection<P>`, `must`/`should`/`must_not` filter DSL                                            |
+| `index/turboquant-index`                     | growable positional flat index                                                                                        |
+| `index/id-map-index`                         | stable id↔slot layer                                                                                                  |
+| `io/serialize`                               | versioned `QVEC` (de)serialization (see [Serialization Format](serialization.md))                                     |
 
 ## Scope
 
 quantvec is a **flat** quantized index — search is an O(n) scan, excellent to ~1–10M vectors. It is
-not an HNSW graph; an IVF/coarse-quantizer layer for larger corpora is on the [roadmap](/docs/roadmap).
+not an HNSW graph; an IVF/coarse-quantizer layer for larger corpora is on the [roadmap](roadmap.md).

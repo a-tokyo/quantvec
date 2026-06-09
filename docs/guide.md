@@ -20,8 +20,8 @@ const flat = new Float32Array(m * dim);
 index.add(flat);
 
 // Or arrays of vectors:
-index.add([vecA, vecB]);          // Float32Array[] or number[][]
-index.addOne(vecA);               // single vector
+index.add([vecA, vecB]); // Float32Array[] or number[][]
+index.addOne(vecA); // single vector
 
 // Id-keyed (one id per vector, same order):
 db.addWithIds([101, 102], [vecA, vecB]);
@@ -38,8 +38,8 @@ keeping the original vectors:
 
 ```ts
 const index = new TurboQuantIndex({ dim, metric: 'cosine' });
-index.search(query, 10);                        // cosine (default)
-index.search(query, 10, { metric: 'dot' });     // inner product
+index.search(query, 10); // cosine (default)
+index.search(query, 10, { metric: 'dot' }); // inner product
 index.search(query, 10, { metric: 'euclidean' }); // squared L2 (scores are dist²)
 ```
 
@@ -83,8 +83,8 @@ In Node, the `quantvec/node` subpath wraps this with the filesystem:
 import { saveIndex, loadIndex, loadIdMapIndex, readIndexBytes } from 'quantvec/node';
 
 await saveIndex(index, './index.qv');
-const idx = await loadIndex('./index.qv');        // TurboQuantIndex
-const db = await loadIdMapIndex('./db.qv');        // IdMapIndex
+const idx = await loadIndex('./index.qv'); // TurboQuantIndex
+const db = await loadIdMapIndex('./db.qv'); // IdMapIndex
 ```
 
 In the browser / Workers, persist `toBytes()` to IndexedDB, Cache API, KV, or `fetch` it back.
@@ -99,17 +99,19 @@ import { IndexError, IdMapError, DeserializeError } from 'quantvec';
 try {
   db.remove('missing');
 } catch (e) {
-  if (e instanceof IdMapError && e.code === 'UNKNOWN_ID') { /* ... */ }
+  if (e instanceof IdMapError && e.code === 'UNKNOWN_ID') {
+    /* ... */
+  }
 }
 ```
 
-| Error | Sample codes |
-| ----- | ------------ |
-| `IndexError` | `INVALID_DIM`, `INVALID_BITS`, `INVALID_SEED`, `INVALID_VECTOR`, `INVALID_LENGTH`, `INVALID_INDEX`, `EMPTY`, `WRONG_KIND` |
-| `IdMapError` | `DUPLICATE_ID`, `UNKNOWN_ID`, `COUNT_MISMATCH`, `INVALID_ID_TYPE`, `INVALID_VECTOR`, `EMPTY`, `WRONG_KIND` |
-| `DeserializeError` | `BAD_MAGIC`, `BAD_VERSION`, `BAD_KIND`, `BAD_DIM`, `BAD_SEED`, `BAD_LENGTH`, `BAD_ID`, `TOO_SHORT` |
-| `EncodeError` | `ZERO_VECTOR`, `INVALID_LENGTH` |
-| `SearchError` | `INVALID_K`, `ZERO_QUERY`, `INVALID_MASK` |
+| Error              | Sample codes                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `IndexError`       | `INVALID_DIM`, `INVALID_BITS`, `INVALID_SEED`, `INVALID_VECTOR`, `INVALID_LENGTH`, `INVALID_INDEX`, `EMPTY`, `WRONG_KIND` |
+| `IdMapError`       | `DUPLICATE_ID`, `UNKNOWN_ID`, `COUNT_MISMATCH`, `INVALID_ID_TYPE`, `INVALID_VECTOR`, `EMPTY`, `WRONG_KIND`                |
+| `DeserializeError` | `BAD_MAGIC`, `BAD_VERSION`, `BAD_KIND`, `BAD_DIM`, `BAD_SEED`, `BAD_LENGTH`, `BAD_ID`, `TOO_SHORT`                        |
+| `EncodeError`      | `ZERO_VECTOR`, `INVALID_LENGTH`                                                                                           |
+| `SearchError`      | `INVALID_K`, `ZERO_QUERY`, `INVALID_MASK`                                                                                 |
 
 ## Calibration (TQ+)
 
@@ -166,8 +168,8 @@ payload; pass `withPayload: false` to omit payloads from hits.
 ## Lifecycle helpers
 
 ```ts
-index.size;        // live vector count
-index.clear();     // drop all vectors (keeps capacity)
-db.ids();          // snapshot of all ids in slot order
-db.has(id);        // membership test
+index.size; // live vector count
+index.clear(); // drop all vectors (keeps capacity)
+db.ids(); // snapshot of all ids in slot order
+db.has(id); // membership test
 ```

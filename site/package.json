@@ -5,7 +5,10 @@
   "description": "Docs + landing site for quantvec (Nextra).",
   "license": "Apache-2.0",
   "scripts": {
+    "copy-docs": "node scripts/copy-docs.mjs",
+    "predev": "node scripts/copy-docs.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-docs.mjs",
     "build": "next build",
     "start": "next start"
   },

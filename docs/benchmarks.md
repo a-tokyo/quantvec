@@ -7,22 +7,22 @@ Three harnesses in `benchmarks/`: synthetic (no download), SIFT-small (~5 MB), a
 `npm run bench:real` — 10k × 128-d vectors, 100 queries, 100-NN L2 ground truth from the dataset.
 dim=128 is a power of two → FWHT rotation + WASM kernel active:
 
-| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS    | fastScan QPS | compression |
-| ---- | -------- | --------- | ---------- | -------------- | ------ | ------------ | ----------- |
-| 2    | 0.620    | 0.670     | 0.744      | ~269k          | ~1050  | —            | 12.8×       |
-| 3    | 0.720    | 0.801     | 0.863      | ~197k          | ~1084  | —            | 9.1×        |
-| 4    | 0.860    | 0.888     | 0.928      | ~177k          | ~1152  | **~2055**    | 7.1×        |
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS   | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | ----- | ------------ | ----------- |
+| 2    | 0.620    | 0.670     | 0.744      | ~269k          | ~1050 | —            | 12.8×       |
+| 3    | 0.720    | 0.801     | 0.863      | ~197k          | ~1084 | —            | 9.1×        |
+| 4    | 0.860    | 0.888     | 0.928      | ~177k          | ~1152 | **~2055**    | 7.1×        |
 
 ## GloVe-200 (real text embeddings)
 
 `npm run bench:glove` — 100k of 1.18M × 200-d GloVe word vectors, 1000 queries, brute-force cosine
 ground truth within the sub-sample. dim=200 is **not** a power of two → dense Householder rotation:
 
-| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
-| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
-| 2    | 0.550    | 0.610     | 0.653      | ~27k           | ~69  | —            | 13.8×       |
-| 3    | 0.730    | 0.781     | 0.814      | ~20k           | ~72  | —            | 9.6×        |
-| 4    | 0.845    | **0.880** | 0.901      | ~19k           | ~71  | **~456**     | 7.4×        |
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | --- | ------------ | ----------- |
+| 2    | 0.550    | 0.610     | 0.653      | ~27k           | ~69 | —            | 13.8×       |
+| 3    | 0.730    | 0.781     | 0.814      | ~20k           | ~72 | —            | 9.6×        |
+| 4    | 0.845    | **0.880** | 0.901      | ~19k           | ~71 | **~456**     | 7.4×        |
 
 Encode throughput is lower than SIFT-small because dim=200 uses the O(d²) dense rotation; SIFT-small
 uses the O(d·log d) FWHT.

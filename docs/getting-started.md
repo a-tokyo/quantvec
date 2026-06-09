@@ -50,14 +50,14 @@ db.remove('b'); // O(1)
 
 ## Choosing `bits`
 
-| bits | use when |
-| ---- | -------- |
+| bits | use when                                       |
+| ---- | ---------------------------------------------- |
 | 2    | maximum compression, recall-tolerant workloads |
-| 3    | balanced |
-| 4    | best recall (default) |
+| 3    | balanced                                       |
+| 4    | best recall (default)                          |
 
 Higher dimensions quantize better — the random rotation makes coordinates near-Gaussian and the
-unbiased-estimator variance shrinks with `d`. See [Benchmarks](/docs/benchmarks).
+unbiased-estimator variance shrinks with `d`. See [Benchmarks](benchmarks.md).
 
 ## WASM FastScan (faster queries)
 
@@ -93,10 +93,10 @@ const hits = col.search(query, {
 // hits: { id, score, payload }[]
 ```
 
-See the [Usage Guide](/docs/guide) for the full filter DSL.
+See the [Usage Guide](guide.md) for the full filter DSL.
 
 ## Next steps
 
-- [Usage Guide](/docs/guide) — metrics, filtering, persistence, error handling.
-- [API Reference](/docs/api-reference) — every option and return type.
-- [Architecture](/docs/architecture) — how the pipeline works.
+- [Usage Guide](guide.md) — metrics, filtering, persistence, error handling.
+- [API Reference](api-reference.md) — every option and return type.
+- [Architecture](architecture.md) — how the pipeline works.
