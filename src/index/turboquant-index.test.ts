@@ -502,4 +502,30 @@ describe('TurboQuantIndex — FastScan path (v128 blocked-nibble + exact rescore
     idx.add(gaussianVecs(50, 52)); // mutate → dirty
     expect(() => idx.search(q, 5)).not.toThrow();
   });
+
+  it('applies the calibration dual on the FastScan path (high recall vs exact+calibrated)', () => {
+    const data = gaussianVecs(1200, 60); // >= CALIBRATION_MIN_SAMPLES to fit calibration
+    const queries = gaussianVecs(10, 61);
+    const exact = new TurboQuantIndex({ dim: FDIM, bits: 4, metric: 'cosine', calibrate: true });
+    const fast = new TurboQuantIndex({
+      dim: FDIM,
+      bits: 4,
+      metric: 'cosine',
+      calibrate: true,
+      fastscan: true,
+    });
+    exact.add(data);
+    fast.add(data);
+    expect(exact.calibrated).toBe(true);
+    expect(fast.calibrated).toBe(true);
+    let totalHits = 0;
+    const k = 10;
+    for (const q of queries) {
+      const a = exact.search(q, k);
+      const b = fast.search(q, k);
+      const setA = new Set(Array.from(a.indices));
+      for (const idx of b.indices) if (setA.has(idx)) totalHits++;
+    }
+    expect(totalHits / (queries.length * k)).toBeGreaterThan(0.8);
+  });
 });

@@ -5,9 +5,10 @@
 // typed payloads. Filtering compiles to a predicate that the core scan applies as a
 // per-vector allowlist, so it reuses the same (WASM or scalar) search path.
 
-import { IdMapIndex } from '../index/id-map-index';
+import { IdMapError, IdMapIndex } from '../index/id-map-index';
 import type { IdMapSearchOptions } from '../index/id-map-index';
 import type { TurboQuantIndexOptions } from '../index/turboquant-index';
+import { validateVectorBatch } from '../core/encode';
 import type { Distance } from '../core/metrics';
 import type { IdType } from '../io/serialize';
 import { compileFilter } from './filter';
@@ -54,10 +55,26 @@ export class Collection<P = unknown, Id extends IdType = number | string> {
    * and payload are removed first, then re-added. A point without a `payload` clears any
    * stored payload for that id.
    *
-   * @throws {IdMapError} on duplicate ids within the batch, or `EncodeError` on a
-   *   non-finite/zero vector (a malformed vector mid-batch may leave prior versions removed).
+   * The whole batch is validated up front — a duplicate id within the batch or an
+   * invalid vector (wrong length, non-finite, or zero) leaves the collection
+   * completely unchanged.
+   *
+   * @throws {IdMapError} `'DUPLICATE_ID'` on duplicate ids within the batch.
+   * @throws {EncodeError} `'INVALID_LENGTH'`/`'ZERO_VECTOR'` on an invalid vector.
    */
   upsert(points: readonly Point<P, Id>[]): void {
+    const vecArr = points.map((p) =>
+      p.vector instanceof Float32Array ? p.vector : Float32Array.from(p.vector),
+    );
+    const seen = new Set<Id>();
+    for (const p of points) {
+      if (seen.has(p.id)) {
+        throw new IdMapError('DUPLICATE_ID', `duplicate id ${String(p.id)} in upsert batch`);
+      }
+      seen.add(p.id);
+    }
+    validateVectorBatch(vecArr);
+
     for (const p of points) {
       if (this.#index.has(p.id)) {
         this.#index.remove(p.id);
@@ -66,9 +83,7 @@ export class Collection<P = unknown, Id extends IdType = number | string> {
     }
     this.#index.addWithIds(
       points.map((p) => p.id),
-      points.map((p) =>
-        p.vector instanceof Float32Array ? p.vector : Float32Array.from(p.vector),
-      ),
+      vecArr,
     );
     for (const p of points) {
       if (p.payload !== undefined) this.#payloads.set(p.id, p.payload);

@@ -125,6 +125,31 @@ describe('IdMapIndex — validation', () => {
     );
   });
 
+  it('rejects a batch with a zero/non-finite vector anywhere without partial mutation', () => {
+    const idx = new IdMapIndex<number>({ dim: DIM });
+    // Vectors 0 and 1 are valid; vector 2 is a zero vector — the whole batch must
+    // be rejected before any row or id is appended.
+    const zero = new Float32Array(DIM);
+    expect(
+      (catchError(() => idx.addWithIds([1, 2, 3], [ORTHO[0]!, ORTHO[1]!, zero])) as EncodeError)
+        .code,
+    ).toBe('ZERO_VECTOR');
+    expect(idx.size).toBe(0);
+    expect(idx.has(1)).toBe(false);
+    expect(idx.has(2)).toBe(false);
+
+    const nonFinite = Float32Array.from(ORTHO[0]!);
+    nonFinite[0] = NaN;
+    expect(
+      (
+        catchError(() =>
+          idx.addWithIds([1, 2, 3], [ORTHO[0]!, nonFinite, ORTHO[1]!]),
+        ) as EncodeError
+      ).code,
+    ).toBe('INVALID_LENGTH');
+    expect(idx.size).toBe(0);
+  });
+
   it('search throws IdMapError EMPTY on an empty index', () => {
     const idx = new IdMapIndex<number>({ dim: DIM });
     expect((catchError(() => idx.search(ORTHO[0]!, 1)) as IdMapError).code).toBe('EMPTY');

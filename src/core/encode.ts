@@ -114,6 +114,35 @@ function validateBits(bits: number): asserts bits is 2 | 3 | 4 {
 }
 
 /**
+ * Validate that every vector in a batch is finite and non-zero, *without* mutating
+ * anything — callers that need to add a batch atomically (e.g. `IdMapIndex.addWithIds`,
+ * `Collection.upsert`) run this first so a bad vector anywhere in the batch leaves
+ * their state completely unchanged, instead of failing partway through.
+ *
+ * @throws {EncodeError} `'INVALID_LENGTH'` on a non-finite element, or `'ZERO_VECTOR'`
+ *   on an all-zero vector.
+ */
+export function validateVectorBatch(vecs: readonly Float32Array[]): void {
+  for (let j = 0; j < vecs.length; j++) {
+    const v = vecs[j]!;
+    let normSq = 0;
+    for (let i = 0; i < v.length; i++) {
+      const x = v[i]!;
+      if (!Number.isFinite(x)) {
+        throw new EncodeError('INVALID_LENGTH', `vector ${j}[${i}] must be finite, got ${x}`);
+      }
+      normSq += x * x;
+    }
+    if (normSq === 0) {
+      throw new EncodeError(
+        'ZERO_VECTOR',
+        `vector ${j} cannot be a zero vector (no direction to quantize)`,
+      );
+    }
+  }
+}
+
+/**
  * Encode one database vector into per-coordinate codes plus the RaBitQ scale and
  * the stored norm, exactly per the pipeline in this file's header.
  *

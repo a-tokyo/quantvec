@@ -125,4 +125,33 @@ describe('Collection — mutation', () => {
     }
     expect((err as IdMapError).code).toBe('DUPLICATE_ID');
   });
+
+  it('rejects an upsert batch with an invalid vector without removing existing ids', () => {
+    const c = docs();
+    const zero = new Array(8).fill(0);
+    expect(() =>
+      c.upsert([
+        { id: 2, vector: V[1]!, payload: { tag: 'replaced', year: 2031 } },
+        { id: 5, vector: zero, payload: { tag: 'bad', year: 2025 } },
+      ]),
+    ).toThrow();
+    // id 2's prior vector/payload must be untouched — validated before any removal.
+    expect(c.size).toBe(4);
+    expect(c.has(2)).toBe(true);
+    expect(c.get(2)).toEqual({ tag: 'blog', year: 2023 });
+    expect(c.has(5)).toBe(false);
+  });
+
+  it('rejects a re-upsert batch with duplicate ids without removing the existing entry', () => {
+    const c = docs();
+    expect(() =>
+      c.upsert([
+        { id: 2, vector: V[2]!, payload: { tag: 'a', year: 1 } },
+        { id: 2, vector: V[3]!, payload: { tag: 'b', year: 2 } },
+      ]),
+    ).toThrow();
+    expect(c.size).toBe(4);
+    expect(c.has(2)).toBe(true);
+    expect(c.get(2)).toEqual({ tag: 'blog', year: 2023 });
+  });
 });

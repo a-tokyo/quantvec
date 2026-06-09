@@ -499,7 +499,13 @@ export class TurboQuantIndex {
     const B = Math.min(255, Math.floor(65535 / dim));
     const qScale = range > 0 ? B / range : 0;
     const lut8 = new Uint8Array(dim * 16);
-    for (let i = 0; i < dim * levels; i++) lut8[i] = Math.round((valLut[i]! - lo) * qScale);
+    // Clamp to [0, B]: (valLut[i] - lo) * qScale is mathematically in [0, B], but
+    // floating-point rounding can push the max element to B + 1, which would wrap
+    // a Uint8Array write to 0 when B === 255 — silently corrupting that LUT entry.
+    for (let i = 0; i < dim * levels; i++) {
+      const q = Math.round((valLut[i]! - lo) * qScale);
+      lut8[i] = q < 0 ? 0 : q > 255 ? 255 : q;
+    }
     const acc = new Uint16Array(kernel.fastScanBlocks * 16);
     kernel.fastScan(lut8, acc);
 

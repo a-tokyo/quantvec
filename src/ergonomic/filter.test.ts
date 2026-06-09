@@ -22,6 +22,14 @@ describe('compileFilter — leaf conditions', () => {
     expect(p({ year: 'x' })(f)).toBe(false); // non-number
   });
 
+  it('range: gt and lte bounds', () => {
+    const f: Filter = { must: [{ key: 'year', range: { gt: 2020, lte: 2025 } }] };
+    expect(p({ year: 2020 })(f)).toBe(false); // gt is exclusive
+    expect(p({ year: 2021 })(f)).toBe(true);
+    expect(p({ year: 2025 })(f)).toBe(true); // lte is inclusive
+    expect(p({ year: 2026 })(f)).toBe(false);
+  });
+
   it('hasId: id membership', () => {
     const f: Filter = { must: [{ hasId: [1, 5, 9] }] };
     expect(compileFilter(f)(5, {})).toBe(true);

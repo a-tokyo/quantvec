@@ -16,6 +16,7 @@
 // format in ../io/serialize. The bytes are treated as untrusted on the read path.
 
 import type { Bits } from '../core/codebook';
+import { validateVectorBatch } from '../core/encode';
 import type { Distance } from '../core/metrics';
 import { deserializeIndex, serializeIndex } from '../io/serialize';
 import type { IdType } from '../io/serialize';
@@ -211,6 +212,12 @@ export class IdMapIndex<Id extends IdType = number> {
         vecArr[j] = raw instanceof Float32Array ? raw : Float32Array.from(raw);
       }
     }
+    // Validate every vector's values *before* fitting calibration or appending any
+    // row, so a non-finite/zero vector anywhere in the batch leaves the index (and
+    // id map) completely unchanged — addOne's own checks run too late to undo
+    // already-appended rows.
+    validateVectorBatch(vecArr);
+
     this.#index.fitCalibrationFromBatch(vecArr);
 
     for (let j = 0; j < m; j++) {
