@@ -12,7 +12,6 @@
 // with a cached spare value.
 
 const MASK64 = (1n << 64n) - 1n;
-const MASK32 = 0xffffffffn;
 
 /** A deterministic pseudo-random number generator. */
 export interface Rng {
@@ -96,7 +95,7 @@ export function createRng(seed: number | bigint): Rng {
 
   function nextU32(): number {
     // Take the high 32 bits — these are the highest-quality bits for xoshiro.
-    return Number((next64() >> 32n) & MASK32);
+    return Number((next64() >> 32n) & 0xffff_ffffn);
   }
 
   function nextFloat(): number {
