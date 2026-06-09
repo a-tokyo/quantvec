@@ -66,10 +66,10 @@ function main(): void {
     `SIFT-small — base=${base.length} dim=${dim} queries=${queries.length} (euclidean, dataset ground truth)\n\n`,
   );
   process.stdout.write(
-    'bits | recall@1 | recall@10 | recall@100 | encode (vec/s) |   QPS | compression\n',
+    'bits | recall@1 | recall@10 | recall@100 | encode (vec/s) |   QPS | fastScan QPS | compression\n',
   );
   process.stdout.write(
-    '-----|----------|-----------|------------|----------------|-------|------------\n',
+    '-----|----------|-----------|------------|----------------|-------|--------------|------------\n',
   );
 
   const rows = ([2, 3, 4] as Bits[]).map((bits) => {
@@ -93,7 +93,16 @@ function main(): void {
     }
     const nq = queries.length;
     const compression = (base.length * dim * 4) / index.toBytes().length;
-    const row = {
+    const row: {
+      bits: Bits;
+      recall1: number;
+      recall10: number;
+      recall100: number;
+      encodeVecPerSec: number;
+      qps: number;
+      fastScanQps?: number;
+      compressionVsF32: number;
+    } = {
       bits,
       recall1: r1 / nq,
       recall10: r10 / nq,
@@ -102,20 +111,51 @@ function main(): void {
       qps,
       compressionVsF32: compression,
     };
+    return row;
+  });
+
+  // FastScan QPS — 4-bit only.
+  {
+    const fsIndex = new TurboQuantIndex({
+      dim,
+      bits: 4,
+      metric: 'euclidean',
+      fastscan: true,
+      seed: 1,
+    });
+    fsIndex.add(base);
+    const tFs = performance.now();
+    for (const q of queries) fsIndex.search(q, 100);
+    const fsSecs = (performance.now() - tFs) / 1000;
+    const row4 = rows.find((r) => r.bits === 4)!;
+    row4.fastScanQps = queries.length / fsSecs;
+  }
+
+  // Print rows after FastScan is populated.
+  for (const row of rows) {
+    const fsCol =
+      row.fastScanQps !== undefined
+        ? Math.round(row.fastScanQps).toString().padStart(12)
+        : '           —';
     process.stdout.write(
-      `  ${bits}  |  ${row.recall1.toFixed(3)}   |   ${row.recall10.toFixed(3)}   |   ${row.recall100.toFixed(
+      `  ${row.bits}  |  ${row.recall1.toFixed(3)}   |   ${row.recall10.toFixed(3)}   |   ${row.recall100.toFixed(
         3,
       )}    | ${Math.round(row.encodeVecPerSec).toString().padStart(14)} | ${Math.round(row.qps)
         .toString()
-        .padStart(5)} | ${row.compressionVsF32.toFixed(2)}x\n`,
+        .padStart(5)} | ${fsCol} | ${row.compressionVsF32.toFixed(2)}x\n`,
     );
-    return row;
-  });
+  }
 
   process.stdout.write('\n');
   for (const r of rows) {
     process.stdout.write(`METRIC sift_recall_at10_${r.bits}bit=${r.recall10.toFixed(4)}\n`);
     process.stdout.write(`METRIC sift_qps_${r.bits}bit=${Math.round(r.qps)}\n`);
+  }
+  {
+    const row4 = rows.find((r) => r.bits === 4)!;
+    if (row4.fastScanQps !== undefined) {
+      process.stdout.write(`METRIC sift_fastscan_qps_4bit=${Math.round(row4.fastScanQps)}\n`);
+    }
   }
   const outDir = join(process.cwd(), 'benchmarks', 'results');
   mkdirSync(outDir, { recursive: true });

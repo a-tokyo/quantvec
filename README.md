@@ -205,32 +205,36 @@ See [`docs/research/`](./docs/research/) for distilled paper notes and architect
 ### SIFT-small (real dataset)
 
 10k × 128-d vectors · 100 queries · 100-NN L2 ground truth (`npm run bench:real`).
-dim=128 is a power of two, so FWHT rotation and the WASM kernel are active.
+dim=128 is a power of two → FWHT rotation + WASM kernel active.
 
-| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS   | compression |
-| ---- | -------- | --------- | ---------- | -------------- | ----- | ----------- |
-| 2    | 0.62     | 0.67      | 0.74       | ~255k          | ~990  | 12.8×       |
-| 3    | 0.72     | 0.80      | 0.86       | ~191k          | ~1040 | 9.1×        |
-| 4    | 0.86     | 0.89      | 0.93       | ~171k          | ~1080 | 7.1×        |
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS   | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | ----- | ------------ | ----------- |
+| 2    | 0.620    | 0.670     | 0.744      | ~269k          | ~1050 | —            | 12.8×       |
+| 3    | 0.720    | 0.801     | 0.863      | ~197k          | ~1084 | —            | 9.1×        |
+| 4    | 0.860    | 0.888     | 0.928      | ~177k          | ~1152 | **~2055**    | 7.1×        |
 
 ### FastScan speedup
 
-Measured on 50k × 128-d Gaussian vectors, 1000 queries (Node, Apple Silicon):
+FastScan scales with corpus size. Measured on Apple Silicon:
 
-| path              | ms/query    | speedup  |
-| ----------------- | ----------- | -------- |
-| exact WASM kernel | 4.2 ms      | 1×       |
-| **v128 FastScan** | **0.74 ms** | **5.7×** |
+| corpus   | exact WASM | v128 FastScan | speedup  |
+| -------- | ---------- | ------------- | -------- |
+| 10k vecs | 1152 QPS   | 2055 QPS      | **1.8×** |
+| 50k vecs | ~240 QPS   | ~1350 QPS     | **5.7×** |
+
+The gain grows with `n` because the SIMD scan cost scales linearly while the fixed
+rescore-pool overhead stays constant. Enable with `fastscan: true` (4-bit only; pure-TS
+fallback when WASM is unavailable).
 
 ### Synthetic (dataset-free)
 
-`dim=1536, cosine` · recall vs exact float32 (`bun run benchmarks/flat.ts`):
+`dim=768, n=5000, cosine` · recall vs exact float32 (`npx tsx benchmarks/flat.ts`):
 
-| bits | recall@10 | compression |
-| ---- | --------- | ----------- |
-| 2    | 0.64      | 15.7×       |
-| 3    | 0.80      | 10.5×       |
-| 4    | 0.89      | 7.9×        |
+| bits | recall@10 | fastScan QPS | compression |
+| ---- | --------- | ------------ | ----------- |
+| 2    | 0.625     | —            | 15.4×       |
+| 3    | 0.794     | —            | 10.4×       |
+| 4    | 0.887     | **~528**     | 7.8×        |
 
 True bit-packing — on par with native TurboQuant (~15.8× @ 2-bit / ~8.0× @ 4-bit).
 Full results and JSON in [`benchmarks/`](./benchmarks/).

@@ -4,15 +4,15 @@
   "nq": 500,
   "anisotropy": 0.3,
   "metric": "cosine",
-  "generatedAt": "2026-06-09T09:17:32.891Z",
+  "generatedAt": "2026-06-09T20:36:43.829Z",
   "rows": [
     {
       "bits": 2,
       "recall1": 0.476,
       "recall10": 0.6247999999999997,
       "recall100": 0.7165399999999997,
-      "encodeVecPerSec": 1946.0413971516093,
-      "qps": 209.3739582847338,
+      "encodeVecPerSec": 1912.574620538032,
+      "qps": 258.58990956448366,
       "bytesPerVector": 200.005,
       "compressionVsF32": 15.35961600959976
     },
@@ -21,8 +21,8 @@
       "recall1": 0.7,
       "recall10": 0.7943999999999997,
       "recall100": 0.8468599999999996,
-      "encodeVecPerSec": 1787.0383164439545,
-      "qps": 211.75586323652382,
+      "encodeVecPerSec": 1868.0644601959289,
+      "qps": 262.91492910068007,
       "bytesPerVector": 296.005,
       "compressionVsF32": 10.378203070894072
     },
@@ -31,10 +31,11 @@
       "recall1": 0.85,
       "recall10": 0.8871999999999977,
       "recall100": 0.92254,
-      "encodeVecPerSec": 1816.5062840147564,
-      "qps": 210.82532157581582,
+      "encodeVecPerSec": 1830.5116735412398,
+      "qps": 263.0573503409072,
       "bytesPerVector": 392.005,
-      "compressionVsF32": 7.836634736801827
+      "compressionVsF32": 7.836634736801827,
+      "fastScanQps": 527.6492841843851
     }
   ]
 }

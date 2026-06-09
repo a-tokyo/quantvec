@@ -98,6 +98,7 @@ interface Row {
   recall100: number;
   encodeVecPerSec: number;
   qps: number;
+  fastScanQps?: number;
   bytesPerVector: number;
   compressionVsF32: number;
 }
@@ -164,14 +165,35 @@ function main(): void {
 
   const rows: Row[] = ([2, 3, 4] as Bits[]).map((bits) => benchBits(bits, db, queries, exact, dim));
 
+  // FastScan QPS — 4-bit only.
+  {
+    const fsIndex = new TurboQuantIndex({
+      dim,
+      bits: 4,
+      metric: 'cosine',
+      fastscan: true,
+      seed: 1,
+    });
+    fsIndex.add(db);
+    const tFs = performance.now();
+    for (const q of queries) fsIndex.search(q, 100);
+    const fsSecs = (performance.now() - tFs) / 1000;
+    const row4 = rows.find((r) => r.bits === 4)!;
+    row4.fastScanQps = queries.length / fsSecs;
+  }
+
   // Human table.
   process.stdout.write(
-    '\nbits | recall@1 | recall@10 | recall@100 | encode (vec/s) |    QPS | bytes/vec | compression\n',
+    '\nbits | recall@1 | recall@10 | recall@100 | encode (vec/s) |    QPS | fastScan QPS | bytes/vec | compression\n',
   );
   process.stdout.write(
-    '-----|----------|-----------|------------|----------------|--------|-----------|------------\n',
+    '-----|----------|-----------|------------|----------------|--------|--------------|-----------|------------\n',
   );
   for (const r of rows) {
+    const fsCol =
+      r.fastScanQps !== undefined
+        ? Math.round(r.fastScanQps).toString().padStart(12)
+        : '           —';
     process.stdout.write(
       `  ${r.bits}  |  ${r.recall1.toFixed(3)}   |   ${r.recall10.toFixed(3)}   |   ${r.recall100.toFixed(
         3,
@@ -179,7 +201,7 @@ function main(): void {
         .toString()
         .padStart(
           6,
-        )} | ${r.bytesPerVector.toFixed(1).padStart(9)} | ${r.compressionVsF32.toFixed(2)}x\n`,
+        )} | ${fsCol} | ${r.bytesPerVector.toFixed(1).padStart(9)} | ${r.compressionVsF32.toFixed(2)}x\n`,
     );
   }
 
@@ -189,6 +211,12 @@ function main(): void {
     process.stdout.write(`METRIC recall_at10_${r.bits}bit=${r.recall10.toFixed(4)}\n`);
     process.stdout.write(`METRIC qps_${r.bits}bit=${Math.round(r.qps)}\n`);
     process.stdout.write(`METRIC compression_${r.bits}bit=${r.compressionVsF32.toFixed(2)}\n`);
+  }
+  {
+    const row4 = rows.find((r) => r.bits === 4)!;
+    if (row4.fastScanQps !== undefined) {
+      process.stdout.write(`METRIC fastscan_qps_4bit=${Math.round(row4.fastScanQps)}\n`);
+    }
   }
 
   // JSON results (under the repo's benchmarks/results, relative to the run cwd).
