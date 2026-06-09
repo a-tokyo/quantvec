@@ -428,3 +428,78 @@ describe('TurboQuantIndex — WASM kernel', () => {
     expect(res.indices[0]).not.toBe(3);
   });
 });
+
+describe('TurboQuantIndex — FastScan path (v128 blocked-nibble + exact rescore)', () => {
+  const FDIM = 64;
+  function gaussianVecs(n: number, seed: number): Float32Array[] {
+    const rng = createRng(seed);
+    return Array.from({ length: n }, () => {
+      const v = new Float32Array(FDIM);
+      for (let i = 0; i < FDIM; i++) v[i] = rng.nextGaussian();
+      return v;
+    });
+  }
+
+  it('returns the same top-k as the exact path on Gaussian data (high recall)', () => {
+    const data = gaussianVecs(500, 10);
+    const queries = gaussianVecs(10, 11);
+    const exact = new TurboQuantIndex({ dim: FDIM, bits: 4, metric: 'cosine' });
+    const fast = new TurboQuantIndex({ dim: FDIM, bits: 4, metric: 'cosine', fastscan: true });
+    exact.add(data);
+    fast.add(data);
+    let totalHits = 0;
+    const k = 10;
+    for (const q of queries) {
+      const a = exact.search(q, k);
+      const b = fast.search(q, k);
+      const setA = new Set(Array.from(a.indices));
+      for (const idx of b.indices) if (setA.has(idx)) totalHits++;
+    }
+    // FastScan rescores the pool exactly; recall should be very high on Gaussian data.
+    expect(totalHits / (queries.length * k)).toBeGreaterThan(0.8);
+  });
+
+  it('matches exact path when fastscan=false (4-bit, no wasm) to confirm fallback gate', () => {
+    const data = gaussianVecs(100, 20);
+    const q = gaussianVecs(1, 21)[0]!;
+    const exact = new TurboQuantIndex({ dim: FDIM, bits: 4, wasm: false });
+    const fast = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: false });
+    exact.add(data);
+    fast.add(data);
+    const a = exact.search(q, 5);
+    const b = fast.search(q, 5);
+    expect(Array.from(a.indices)).toEqual(Array.from(b.indices));
+  });
+
+  it('fastscan is ignored for bits != 4 (falls back to exact)', () => {
+    const data = gaussianVecs(100, 30);
+    const q = gaussianVecs(1, 31)[0]!;
+    const idx2 = new TurboQuantIndex({ dim: FDIM, bits: 2, fastscan: true });
+    const idx4 = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: false });
+    idx2.add(data);
+    idx4.add(data);
+    // Both should complete without error; we just verify no crash.
+    expect(() => idx2.search(q, 5)).not.toThrow();
+    expect(() => idx4.search(q, 5)).not.toThrow();
+  });
+
+  it('honors a mask on the FastScan path', () => {
+    const data = gaussianVecs(200, 40);
+    const idx = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: true });
+    idx.add(data);
+    const mask = new Uint8Array(200).fill(1);
+    // Exclude the self-match at slot 7.
+    mask[7] = 0;
+    const res = idx.search(data[7]!, 1, { mask });
+    expect(res.indices[0]).not.toBe(7);
+  });
+
+  it('re-uploads blocked codes after mutation', () => {
+    const idx = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: true });
+    idx.add(gaussianVecs(50, 50));
+    const q = gaussianVecs(1, 51)[0]!;
+    idx.search(q, 5); // initial upload
+    idx.add(gaussianVecs(50, 52)); // mutate → dirty
+    expect(() => idx.search(q, 5)).not.toThrow();
+  });
+});

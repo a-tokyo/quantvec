@@ -12,54 +12,70 @@ Runs anywhere JavaScript runs — Node, browsers, Bun, Cloudflare Workers, React
 [![npm](https://img.shields.io/npm/v/quantvec.svg)](https://www.npmjs.com/package/quantvec)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-**Add vectors, search instantly — no training, no native build, no server.** 7.9–15.7× smaller than
-float32, runs in Node, the browser, Bun, and edge runtimes, with a WASM kernel and a pure-TS fallback.
+**Add vectors, search instantly — no training, no native build, no server.**  
+7.9–15.7× smaller than float32. WASM v128 FastScan for 5–6× faster queries.  
+Node · Browser · Bun · Cloudflare Workers · React Native.
 
 </div>
 
+---
+
 ## Why quantvec
 
-Most vector quantizers need a **training phase** (k-means codebooks, learned rotations) — awkward
-when you can't ship a trained model or run k-means in-process. TurboQuant is **data-oblivious**: a
-random rotation makes every coordinate follow a known Beta distribution, so an optimal per-coordinate
-scalar quantizer works with **no training and ~zero indexing time** (paper Table 2). That makes
-quantvec a natural fit for **edge, serverless, and browser** vector search.
+Most vector quantizers need a **training phase** — k-means codebooks, learned rotations — awkward
+when you can't run k-means in-process or ship a trained model. TurboQuant is **data-oblivious**: a
+random rotation makes every coordinate follow a known Beta distribution, so the MSE-optimal
+scalar codebook is fully determined by `(dim, bits)` with **no data and ~zero indexing time**.
 
-- **Zero training, instant ingest** — add vectors, search immediately. No fit step, no codebook to ship.
-- **Isomorphic** — one package for Node, browsers, Bun, Workers, React Native. Standard ESM/CJS + types,
-  zero runtime dependencies, no `node:*` in the core.
-- **Runtime-selectable metrics** — `cosine`, `dot`, or `euclidean` per query (norms are stored).
-- **Flexible ids** — `number` (default), `string`, or `bigint`.
-- **Hardened persistence** — one versioned binary format; the load path validates every field of
-  untrusted input before allocating.
+| Feature            | quantvec                                                           |
+| ------------------ | ------------------------------------------------------------------ |
+| Training required  | **No** — rotation + codebook fixed by (dim, bits, seed)            |
+| Compression        | **7.9–15.7×** (true 2/3/4-bit packing)                             |
+| Query acceleration | **WASM v128 FastScan** — 5–6× faster than scalar, pure-TS fallback |
+| Runtimes           | Node · Browser · Bun · Cloudflare Workers · React Native           |
+| Metrics            | `cosine` · `dot` · `euclidean` per query                           |
+| Id types           | `number` · `string` · `bigint`                                     |
+| Dependencies       | **Zero** runtime dependencies                                      |
 
-> **Scope:** quantvec is a _flat quantized index_ — search is a linear scan over compact codes (à la
-> FAISS `IndexPQFastScan`), not an HNSW graph. Great recall and throughput up to ~1–10M vectors; a
-> coarse-quantizer/IVF layer for larger corpora is on the roadmap.
+> **Scope:** quantvec is a _flat quantized index_ — O(n) scan over compact codes (à la FAISS
+> `IndexPQFastScan`). Great recall and throughput up to ~1–10M vectors. An IVF coarse-quantizer
+> for larger corpora is on the roadmap.
+
+---
 
 ## Install
 
 ```bash
-npm install quantvec   # or: bun add quantvec / pnpm add quantvec
+npm install quantvec
+# bun add quantvec  /  pnpm add quantvec  /  yarn add quantvec
 ```
 
+---
+
 ## Quick start
+
+### Low-level: `TurboQuantIndex`
 
 ```ts
 import { TurboQuantIndex } from 'quantvec';
 
-// No training: the rotation + codebook are fixed by (dim, bits, seed).
 const index = new TurboQuantIndex({ dim: 1536, bits: 4, metric: 'cosine' });
 
-index.add(vectors); // a flat Float32Array (m·dim), or number[][] / Float32Array[]
+// flat Float32Array (m·dim), or number[][] / Float32Array[]
+index.add(vectors);
 
-const { indices, scores } = index.search(query, 10); // 10 nearest, best-first
-// indices: Int32Array of slot positions · scores: Float32Array of similarities
+const { indices, scores } = index.search(query, 10);
+// indices: Int32Array (slot positions)  ·  scores: Float32Array (metric values)
 ```
 
-### Stable ids with `IdMapIndex`
+Enable the **v128 FastScan** kernel for ~5–6× faster queries (4-bit only; approximate ranking +
+exact rescore of the candidate pool):
 
-A thin, stable-id layer over the positional index — add, search, and remove by _your_ id:
+```ts
+const index = new TurboQuantIndex({ dim: 1536, bits: 4, fastscan: true });
+```
+
+### Stable ids: `IdMapIndex`
 
 ```ts
 import { IdMapIndex } from 'quantvec';
@@ -67,42 +83,78 @@ import { IdMapIndex } from 'quantvec';
 const db = new IdMapIndex<string>({ dim: 768, bits: 4 });
 db.addWithIds(['doc-1', 'doc-2', 'doc-3'], vectors);
 
-const { ids, scores } = db.search(query, 5); // ids: string[] best-first
+const { ids, scores } = db.search(query, 5); // ids: string[], best-first
 db.has('doc-2'); // → true
-db.remove('doc-2'); // O(1)
+db.remove('doc-2'); // O(1) swap-remove
 
 // Optional allowlist predicate:
 db.search(query, 5, { filter: (id) => id !== 'doc-1' });
 ```
 
-`number` is the default id type; `string` and `bigint` are opt-in via the generic parameter.
+### High-level: `createCollection` (qdrant-inspired)
 
-### Persistence (isomorphic)
+The ergonomic layer stores payloads alongside vectors and supports a structured filter DSL:
 
 ```ts
-const bytes = index.toBytes(); // Uint8Array — store anywhere
-const restored = TurboQuantIndex.fromBytes(bytes);
-// IdMapIndex.fromBytes<string>(bytes) for the id-keyed index.
+import { createCollection } from 'quantvec';
+
+type Doc = { title: string; year: number; published: boolean };
+
+const col = createCollection<Doc>({
+  vectors: { size: 1536, distance: 'cosine' },
+  quantization: { bits: 4 },
+});
+
+// Upsert points with payloads
+col.upsert([
+  { id: 'a', vector: embedA, payload: { title: 'Alpha', year: 2023, published: true } },
+  { id: 'b', vector: embedB, payload: { title: 'Beta', year: 2024, published: false } },
+]);
+
+// Search with a filter
+const hits = col.search(queryVec, {
+  limit: 5,
+  filter: {
+    must: [
+      { key: 'published', match: { value: true } },
+      { key: 'year', range: { gte: 2023 } },
+    ],
+  },
+});
+// hits: Array<{ id, score, payload }>
 ```
 
-In the browser put `bytes` in IndexedDB or `fetch` it; in Node use the `quantvec/node` subpath:
+**Filter DSL** — mirrors qdrant semantics:
+
+| Clause     | Condition types                                                                        |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `must`     | all must match (AND)                                                                   |
+| `should`   | at least one must match (OR), or vacuously true when empty                             |
+| `must_not` | none may match (NOT)                                                                   |
+| Conditions | `{ key, match: { value } }` · `{ key, range: { gt/gte/lt/lte } }` · `{ hasId: [...] }` |
+
+### Persistence
 
 ```ts
-import { saveIndex, loadIndex, loadIdMapIndex } from 'quantvec/node';
+// Isomorphic — store as Uint8Array anywhere (IndexedDB, fetch, etc.)
+const bytes = index.toBytes();
+const restored = TurboQuantIndex.fromBytes(bytes);
 
+// Node helpers (quantvec/node subpath)
+import { saveIndex, loadIndex, loadIdMapIndex } from 'quantvec/node';
 await saveIndex(index, './index.qv');
 const idx = await loadIndex('./index.qv');
 ```
 
 ### Typed errors
 
-Every boundary throws a discriminated, code-tagged error you can switch on:
+Every boundary throws a discriminated, code-tagged error:
 
 ```ts
-import { TurboQuantIndex, IndexError } from 'quantvec';
+import { IndexError } from 'quantvec';
 
 try {
-  new TurboQuantIndex({ dim: 1536 }).search(query, 10); // empty index
+  index.search(query, 10); // throws if index is empty
 } catch (e) {
   if (e instanceof IndexError && e.code === 'EMPTY') {
     /* ... */
@@ -110,39 +162,50 @@ try {
 }
 ```
 
-`IndexError`, `IdMapError`, `DeserializeError`, `EncodeError`, and `SearchError` are all exported.
+Exported error classes: `IndexError` · `IdMapError` · `DeserializeError` · `EncodeError` · `SearchError` · `FilterError`.
+
+---
 
 ## How it works
 
 ```mermaid
 flowchart LR
   V["input vector v"] --> N["normalize<br/>(store ‖v‖)"]
-  N --> R["random rotation Q<br/>(data-independent)"]
-  R --> B["coords ≈ Beta((d−1)/2,(d−1)/2)<br/>≈ N(0, 1/d)"]
-  B --> Q["Lloyd-Max quantize<br/>2 / 3 / 4 bits"]
-  Q --> S["RaBitQ length-renorm scale<br/>(unbiased ⟨q,v⟩)"]
-  S --> DB[("compact codes + scale + norm")]
+  N --> R["random rotation Q\n(FWHT for pow-2 dims;\ndense otherwise)"]
+  R --> B["coords ≈ Beta((d−1)/2,(d−1)/2)"]
+  B --> TQ["TQ+ calibration\n(opt-in; per-coord affine)"]
+  TQ --> Q["Lloyd-Max quantize\n2 / 3 / 4 bits"]
+  Q --> S["RaBitQ scale\n(unbiased ⟨q,v⟩)"]
+  S --> DB[("bit-packed codes\n+ scale + norm")]
+
   query["query q"] --> RQ["rotate q"]
-  RQ --> LUT["per-query nibble LUT"]
-  LUT --> SCAN["linear scan over codes"]
-  DB --> SCAN
-  SCAN --> TOPK["top-k (bounded heap)"]
+  RQ --> LUT["nibble LUT\n(dim × levels f32)"]
+  LUT --> FS["v128 FastScan\n(u8 LUT, u16 acc)\nor exact WASM kernel"]
+  DB --> FS
+  FS --> RESCORE["exact rescore\ntop-pool"]
+  RESCORE --> TOPK["top-k heap"]
 ```
 
 1. **Normalize** each vector (store its norm for metric reconstruction).
-2. **Random rotation** (data-independent) → each coordinate ≈ Beta((d−1)/2, (d−1)/2) ≈ N(0, 1/d).
-3. **Lloyd-Max scalar quantization** — the MSE-optimal codebook for that _known_ distribution
-   (no data needed), within ≈2.7× of the information-theoretic bound (paper Theorem 3).
-4. **RaBitQ length-renormalization scale** per vector → an unbiased inner-product estimate at query time.
-5. **Search** rotates the query once, builds a per-query lookup table, and scans the codes.
+2. **Rotate** — FWHT for power-of-two dims (O(d·log d), ~25× faster build), dense Householder otherwise. The rotation is data-independent, frozen by `(dim, seed)`.
+3. **TQ+ calibration** (opt-in) — per-coordinate affine map from a fit on the first add batch; reduces bias on real embeddings.
+4. **Lloyd-Max quantize** — MSE-optimal codebook for the Beta marginal; 2, 3, or 4 bits. No training data needed.
+5. **RaBitQ scale** per vector — yields an unbiased inner-product estimate at query time.
+6. **Search** — rotates the query once, builds a per-query lookup table, then either:
+   - **v128 FastScan** (`fastscan: true`): WASM `swizzle`-based SIMD scan of blocked 16-vector tiles → u16 accumulators → rank candidate pool → exact rescore of the pool. **~5–6× faster** than the scalar path.
+   - **Exact WASM kernel** (default): AssemblyScript f64 accumulation, resident codes in linear memory, bit-identical to the scalar oracle.
+   - **Pure-TS scalar** (automatic fallback when WASM is unavailable).
 
-See [`docs/research/`](./docs/research/) for distilled paper notes and the full architecture.
+See [`docs/research/`](./docs/research/) for distilled paper notes and architecture details.
+
+---
 
 ## Benchmarks
 
-**Real dataset — SIFT-small** (10k × 128-d, 100 queries, 100-NN L2 ground truth; `npm run bench:real`).
-Recall is measured against the dataset's own ground truth; dim=128 (a power of two) exercises the FWHT
-rotation + WASM kernel:
+### SIFT-small (real dataset)
+
+10k × 128-d vectors · 100 queries · 100-NN L2 ground truth (`npm run bench:real`).
+dim=128 is a power of two, so FWHT rotation and the WASM kernel are active.
 
 | bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS   | compression |
 | ---- | -------- | --------- | ---------- | -------------- | ----- | ----------- |
@@ -150,39 +213,60 @@ rotation + WASM kernel:
 | 3    | 0.72     | 0.80      | 0.86       | ~191k          | ~1040 | 9.1×        |
 | 4    | 0.86     | 0.89      | 0.93       | ~171k          | ~1080 | 7.1×        |
 
-**Synthetic** (seeded, dataset-free; `bun run benchmarks/flat.ts`) — `dim=1536, cosine`, recall vs exact
-float32: recall@10 0.64 / 0.80 / 0.89 at 2 / 3 / 4 bits with **15.7× / 10.5× / 7.9×** serialized
-compression (true bit-packing — on par with native TurboQuant, ~15.8× @ 2-bit / ~8.0× @ 4-bit).
+### FastScan speedup
 
-Details and JSON in [`benchmarks/`](./benchmarks/). The bigger v128-FastScan kernel (further query
-speedup) is on the [roadmap](#roadmap).
+Measured on 50k × 128-d Gaussian vectors, 1000 queries (Node, Apple Silicon):
+
+| path              | ms/query    | speedup  |
+| ----------------- | ----------- | -------- |
+| exact WASM kernel | 4.2 ms      | 1×       |
+| **v128 FastScan** | **0.74 ms** | **5.7×** |
+
+### Synthetic (dataset-free)
+
+`dim=1536, cosine` · recall vs exact float32 (`bun run benchmarks/flat.ts`):
+
+| bits | recall@10 | compression |
+| ---- | --------- | ----------- |
+| 2    | 0.64      | 15.7×       |
+| 3    | 0.80      | 10.5×       |
+| 4    | 0.89      | 7.9×        |
+
+True bit-packing — on par with native TurboQuant (~15.8× @ 2-bit / ~8.0× @ 4-bit).
+Full results and JSON in [`benchmarks/`](./benchmarks/).
+
+---
 
 ## Roadmap
 
-| Status | Item                                                                                                                                                                 |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅     | Core math (rotation, Beta/Lloyd-Max codebooks), encode pipeline, flat nibble-LUT search                                                                              |
-| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                                                                            |
-| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                                                                                  |
-| ✅     | **FWHT rotation** for power-of-two dims (exact, O(d·log d) build/encode, ~25× faster encode, recall-neutral)                                                         |
-| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent — helps real embeddings, neutral on synthetic)                                                            |
-| ✅     | **WASM scoring kernel** (AssemblyScript, resident codes, exact f64 — bit-identical to the scalar oracle, ~1.3× faster query; auto feature-detect + pure-TS fallback) |
-| 🚧     | v128 FastScan (blocked-nibble swizzle + u8 LUT + rescore) for a larger query speedup                                                                                 |
-| 🚧     | qdrant-style ergonomic layer: `createCollection`, `Point`, payloads, filter DSL                                                                                      |
-| 📋     | Real-dataset benchmark suite (GloVe / DBpedia / OpenAI)                                                                                                              |
-| 📋     | IVF / coarse-quantizer for 10M+ corpora                                                                                                                              |
+| Status | Item                                                                                   |
+| ------ | -------------------------------------------------------------------------------------- |
+| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search |
+| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers              |
+| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                    |
+| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)               |
+| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                            |
+| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)   |
+| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)     |
+| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                    |
+| ✅     | Real-dataset benchmark suite (SIFT-small; GloVe/OpenAI harness)                        |
+| 📋     | IVF / coarse-quantizer for 10M+ corpora                                                |
+| 📋     | GloVe / DBpedia / OpenAI pre-built benchmark results                                   |
 
-Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md), built with a doer / verifier /
-devil's-advocate subagent workflow.
+Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md).
+
+---
 
 ## References
 
 - **TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate** — Zandieh, Daliri,
-  Hadian, Mirrokni. [arXiv:2504.19874](https://arxiv.org/abs/2504.19874).
+  Hadian, Mirrokni. [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (2025).
 - **RaBitQ: Quantizing High-Dimensional Vectors with a Theoretical Error Bound for Approximate Nearest
-  Neighbor Search** — Gao & Long, SIGMOD 2024. [arXiv:2405.12497](https://arxiv.org/abs/2405.12497).
+  Neighbor Search** — Gao & Long. [arXiv:2405.12497](https://arxiv.org/abs/2405.12497), SIGMOD 2024.
+
+---
 
 ## License
 
-[Apache-2.0](./LICENSE) © Ahmed Tokyo. See [`NOTICE`](./NOTICE). quantvec is an independent clean-room
-implementation and is not affiliated with or endorsed by Google.
+[Apache-2.0](./LICENSE) © Ahmed Tokyo. See [`NOTICE`](./NOTICE).  
+quantvec is an independent clean-room implementation and is not affiliated with or endorsed by Google.
