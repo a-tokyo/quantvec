@@ -1,6 +1,6 @@
 {
   "name": "quantvec",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Data-oblivious, zero-training vector quantization and nearest-neighbor search for TypeScript — a clean-room implementation of Google Research's TurboQuant. Runs in Node, browsers, Bun, and edge/serverless runtimes.",
   "type": "module",
   "license": "Apache-2.0",
