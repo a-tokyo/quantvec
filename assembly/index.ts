@@ -19,7 +19,41 @@ export function heapBase(): i32 {
 
 /** ABI version so the loader can reject a stale inlined binary. */
 export function abiVersion(): i32 {
-  return 2;
+  return 3;
+}
+
+/**
+ * v128 FastScan (4-bit): score 16-vector blocks against a u8 lookup table using the
+ * `swizzle` (PSHUFB-style 16-byte table lookup) intrinsic, accumulating per-vector
+ * sums in u16. Layout (see src/wasm/kernel.ts): `codes` holds nBlocks × dim × 16 bytes
+ * — for block b, coordinate i, the 16 vectors' codes are 16 contiguous bytes; `lut8`
+ * holds dim × 16 u8 (a 16-entry table per coordinate, globally scaled so dim·max ≤
+ * 65535, hence no u16 overflow); `acc` receives nBlocks × 16 u16. The accumulator is a
+ * monotonic function of the true score, so ranking by it is exact; the caller rescores
+ * the top candidates with the exact kernel.
+ */
+export function fastScan(
+  codesPtr: usize,
+  nBlocks: i32,
+  dim: i32,
+  lut8Ptr: usize,
+  accPtr: usize,
+): void {
+  for (let b = 0; b < nBlocks; b++) {
+    let acc0 = i16x8.splat(0); // u16 sums for vectors 0..7 of the block
+    let acc1 = i16x8.splat(0); // u16 sums for vectors 8..15
+    const blockBase: usize = codesPtr + <usize>(b * dim * 16);
+    for (let i = 0; i < dim; i++) {
+      const codes = v128.load(blockBase + <usize>(i * 16));
+      const lut = v128.load(lut8Ptr + <usize>(i * 16));
+      const looked = v128.swizzle(lut, codes); // 16 u8 partial scores in [0, 255]
+      // Unsigned 8→16 widening; the loader scales the LUT so dim·max ≤ 65535 (no overflow).
+      acc0 = i16x8.add(acc0, i16x8.extend_low_i8x16_u(looked));
+      acc1 = i16x8.add(acc1, i16x8.extend_high_i8x16_u(looked));
+    }
+    v128.store(accPtr + <usize>(b * 32), acc0);
+    v128.store(accPtr + <usize>(b * 32 + 16), acc1);
+  }
 }
 
 /**

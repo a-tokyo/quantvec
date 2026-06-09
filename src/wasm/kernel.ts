@@ -11,7 +11,7 @@
 import { WASM_BASE64 } from './wasm-binary';
 
 /** Kernel ABI the loader expects (assembly/index.ts `abiVersion`). */
-const ABI_VERSION = 2;
+const ABI_VERSION = 3;
 /** WebAssembly memory page size (64 KiB). */
 const PAGE_BYTES = 65536;
 
@@ -54,13 +54,20 @@ interface KernelExports {
     lutPtr: number,
     outPtr: number,
   ): void;
+  fastScan(codesPtr: number, nBlocks: number, dim: number, lut8Ptr: number, accPtr: number): void;
 }
+
+/** Vectors per FastScan block (one v128 lane each). */
+export const FASTSCAN_BLOCK = 16;
 
 function align4(x: number): number {
   return (x + 3) & ~3;
 }
 function align8(x: number): number {
   return (x + 7) & ~7;
+}
+function align16(x: number): number {
+  return (x + 15) & ~15;
 }
 
 /**
@@ -78,6 +85,13 @@ export class WasmKernel {
   #codesOff = 0;
   #lutOff = 0;
   #outOff = 0;
+  // FastScan layout (independent of the exact-scan layout above).
+  #fsN = -1;
+  #fsDim = -1;
+  #fsBlocks = 0;
+  #fsCodesOff = 0;
+  #fsLut8Off = 0;
+  #fsAccOff = 0;
 
   private constructor(ex: KernelExports) {
     this.#ex = ex;
@@ -131,5 +145,57 @@ export class WasmKernel {
       this.#outOff,
     );
     out.set(new Float64Array(this.#ex.memory.buffer, this.#outOff, this.#n));
+  }
+
+  /** Number of 16-vector blocks for the prepared FastScan layout. */
+  get fastScanBlocks(): number {
+    return this.#fsBlocks;
+  }
+
+  /** Lay out [blocked codes | u8 LUT | u16 acc] for FastScan over n × dim 4-bit codes. */
+  prepareFastScan(n: number, dim: number): void {
+    if (n === this.#fsN && dim === this.#fsDim) return;
+    this.#fsN = n;
+    this.#fsDim = dim;
+    this.#fsBlocks = Math.ceil(n / FASTSCAN_BLOCK);
+    this.#fsCodesOff = align16(this.#heapBase);
+    this.#fsLut8Off = align16(this.#fsCodesOff + this.#fsBlocks * dim * FASTSCAN_BLOCK);
+    this.#fsAccOff = align16(this.#fsLut8Off + dim * 16);
+    const end = this.#fsAccOff + this.#fsBlocks * FASTSCAN_BLOCK * 2;
+    const have = this.#ex.memory.buffer.byteLength;
+    if (end > have) this.#ex.memory.grow(Math.ceil((end - have) / PAGE_BYTES));
+  }
+
+  /**
+   * Upload codes into the FastScan blocked layout: for block b, coordinate i, the 16
+   * vectors' codes occupy 16 contiguous bytes; trailing lanes of the last block are 0.
+   * `codes` is the row-major n·dim array (call after {@link prepareFastScan}).
+   */
+  uploadBlockedCodes(codes: Uint8Array): void {
+    const dim = this.#fsDim;
+    const mem = new Uint8Array(this.#ex.memory.buffer, this.#fsCodesOff, this.#fsBlocks * dim * 16);
+    mem.fill(0);
+    for (let v = 0; v < this.#fsN; v++) {
+      const block = (v / FASTSCAN_BLOCK) | 0;
+      const lane = v % FASTSCAN_BLOCK;
+      const src = v * dim;
+      const dst = block * dim * 16 + lane;
+      for (let i = 0; i < dim; i++) mem[dst + i * 16] = codes[src + i]!;
+    }
+  }
+
+  /** Write the u8 LUT (dim × 16), run FastScan, and read the u16 accumulators into `acc`. */
+  fastScan(lut8: Uint8Array, acc: Uint16Array): void {
+    new Uint8Array(this.#ex.memory.buffer, this.#fsLut8Off, this.#fsDim * 16).set(lut8);
+    this.#ex.fastScan(
+      this.#fsCodesOff,
+      this.#fsBlocks,
+      this.#fsDim,
+      this.#fsLut8Off,
+      this.#fsAccOff,
+    );
+    acc.set(
+      new Uint16Array(this.#ex.memory.buffer, this.#fsAccOff, this.#fsBlocks * FASTSCAN_BLOCK),
+    );
   }
 }

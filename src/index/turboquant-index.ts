@@ -24,11 +24,13 @@ import { getCodebook } from '../core/codebook';
 import type { Bits, Codebook } from '../core/codebook';
 import { createEncodeScratch, encodeVector } from '../core/encode';
 import type { EncodeOptions, EncodeScratch } from '../core/encode';
-import type { Distance } from '../core/metrics';
+import { scoreMetric } from '../core/metrics';
+import type { Distance, QueryNorms } from '../core/metrics';
 import { createRotation } from '../core/rotation';
 import type { Rotation } from '../core/rotation';
-import { searchFlat } from '../core/search';
-import type { EncodedDb, SearchResult } from '../core/search';
+import { buildQueryLut, searchFlat } from '../core/search';
+import type { EncodedDb, SearchOptions, SearchResult } from '../core/search';
+import { TopK } from '../core/topk';
 import { WasmKernel } from '../wasm/kernel';
 import { deserializeIndex, serializeIndex } from '../io/serialize';
 import type { IndexPayload } from '../io/serialize';
@@ -82,6 +84,14 @@ export interface TurboQuantIndexOptions {
    * affects performance, never results. Set false to force the scalar kernel.
    */
   wasm?: boolean;
+  /**
+   * Use the v128 FastScan kernel for queries (default false; 4-bit only). FastScan is a
+   * fast *approximate* SIMD scan that ranks a candidate pool, then rescores the pool
+   * exactly — high recall at higher throughput, but (unlike the default exact path) not
+   * bit-identical. Ignored when bits ≠ 4 or WebAssembly is unavailable (falls back to
+   * the exact scan).
+   */
+  fastscan?: boolean;
 }
 
 /** Per-query options for {@link TurboQuantIndex.search}. */
@@ -171,13 +181,23 @@ export class TurboQuantIndex {
   #calibrationFrozen: boolean;
   /** Whether to use the WASM kernel when available. */
   readonly #wasmEnabled: boolean;
+  /** Whether to use the FastScan path (4-bit, approximate + rescore) when available. */
+  readonly #fastscan: boolean;
   /** Lazily-created WASM kernel: undefined = not tried, null = unavailable. */
   #wasm: WasmKernel | null | undefined;
   /** True when the resident WASM codes are stale (mutation since last upload). */
   #wasmDirty: boolean;
 
   constructor(options: TurboQuantIndexOptions) {
-    const { dim, bits = 4, metric = 'cosine', seed = 0, calibrate = false, wasm = true } = options;
+    const {
+      dim,
+      bits = 4,
+      metric = 'cosine',
+      seed = 0,
+      calibrate = false,
+      wasm = true,
+      fastscan = false,
+    } = options;
     validateDim(dim);
     validateBits(bits);
     validateSeed(seed);
@@ -190,6 +210,7 @@ export class TurboQuantIndex {
     this.#calibration = undefined;
     this.#calibrationFrozen = false;
     this.#wasmEnabled = wasm;
+    this.#fastscan = fastscan && bits === 4;
     this.#wasm = undefined;
     this.#wasmDirty = true;
     this.#rotation = createRotation(dim, seed);
@@ -400,13 +421,23 @@ export class TurboQuantIndex {
       throw new IndexError('EMPTY', 'cannot search an empty index');
     }
     const metric = opts.metric ?? this.#metric;
-    const searchOpts = opts.mask === undefined ? { metric } : { metric, mask: opts.mask };
+    const searchOpts: SearchOptions =
+      opts.mask === undefined ? { metric } : { metric, mask: opts.mask };
 
-    // WASM acceleration (exact; transparent fallback to the scalar scan). The kernel
-    // is created lazily and the codes are uploaded once per mutation, not per query.
     if (this.#wasmEnabled) {
       if (this.#wasm === undefined) this.#wasm = WasmKernel.create();
       const kernel = this.#wasm;
+      if (
+        kernel !== null &&
+        this.#fastscan &&
+        Number.isInteger(k) &&
+        k > 0 &&
+        query.length === this.#dim
+      ) {
+        return this.#searchFastScan(kernel, query, k, searchOpts);
+      }
+      // Exact WASM acceleration (transparent fallback to the scalar scan). The kernel
+      // is created lazily and the codes are uploaded once per mutation, not per query.
       if (kernel !== null) {
         kernel.prepare(this.#n, this.#dim, 1 << this.#bits);
         if (this.#wasmDirty) {
@@ -417,6 +448,87 @@ export class TurboQuantIndex {
       }
     }
     return searchFlat(this.#db(), query, k, searchOpts);
+  }
+
+  /**
+   * FastScan search (4-bit): the v128 kernel scans every vector with a u8 LUT to rank a
+   * candidate pool (≈4·k), then {@link searchFlat} rescores that pool exactly via a
+   * mask — high recall at higher throughput, exact within the pool.
+   */
+  #searchFastScan(
+    kernel: WasmKernel,
+    query: Float32Array,
+    k: number,
+    searchOpts: SearchOptions,
+  ): SearchResult {
+    const dim = this.#dim;
+    const n = this.#n;
+    const levels = 16; // 4-bit
+    kernel.prepareFastScan(n, dim);
+    if (this.#wasmDirty) {
+      kernel.uploadBlockedCodes(this.#codes.subarray(0, n * dim));
+      this.#wasmDirty = false;
+    }
+
+    // Rotate the query; apply the calibration dual to the per-coordinate LUT + bias.
+    const qRot = new Float32Array(dim);
+    this.#rotation.apply(query, qRot);
+    let lutQuery = qRot;
+    let biasQ = 0;
+    if (this.#calibration !== undefined) {
+      const { shift, scale } = this.#calibration;
+      const qCalib = new Float32Array(dim);
+      for (let i = 0; i < dim; i++) {
+        qCalib[i] = qRot[i]! / scale[i]!;
+        biasQ += qRot[i]! * shift[i]!;
+      }
+      lutQuery = qCalib;
+    }
+    const valLut = buildQueryLut(lutQuery, this.#codebook.centroids, dim, levels);
+
+    // Quantize the float LUT to u8 with one global affine map so dim·max ≤ 65535 and the
+    // u16 accumulator is a monotonic function of the true projection S = ⟨q_calib, c⟩.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < valLut.length; i++) {
+      const x = valLut[i]!;
+      if (x < lo) lo = x;
+      if (x > hi) hi = x;
+    }
+    const range = hi - lo;
+    const B = Math.min(255, Math.floor(65535 / dim));
+    const qScale = range > 0 ? B / range : 0;
+    const lut8 = new Uint8Array(dim * 16);
+    for (let i = 0; i < dim * levels; i++) lut8[i] = Math.round((valLut[i]! - lo) * qScale);
+    const acc = new Uint16Array(kernel.fastScanBlocks * 16);
+    kernel.fastScan(lut8, acc);
+
+    // Approximate metric per vector (dequantize acc → S), select the candidate pool.
+    let qNormSq = 0;
+    for (let i = 0; i < dim; i++) qNormSq += query[i]! * query[i]!;
+    const norms2: QueryNorms = { qNorm: Math.sqrt(qNormSq), qNormSq };
+    const deq = range > 0 ? range / B : 0;
+    const mask = searchOpts.mask;
+    const poolSize = Math.min(n, Math.max(k * 4, k + 64));
+    const pool = new TopK(poolSize);
+    for (let v = 0; v < n; v++) {
+      if (mask !== undefined && !mask[v]) continue;
+      const s = acc[v]! * deq + dim * lo;
+      const { rankKey } = scoreMetric(
+        searchOpts.metric,
+        s - biasQ,
+        this.#scales[v]!,
+        this.#norms[v]!,
+        norms2,
+      );
+      pool.add(rankKey, v);
+    }
+
+    // Exact rescore of the pool: searchFlat scores only the pooled slots (mask) exactly.
+    const poolIdx = pool.result().indices;
+    const poolMask = new Uint8Array(n);
+    for (let i = 0; i < poolIdx.length; i++) poolMask[poolIdx[i]!] = 1;
+    return searchFlat(this.#db(), query, k, { metric: searchOpts.metric, mask: poolMask });
   }
 
   /**
