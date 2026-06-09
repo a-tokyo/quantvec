@@ -10,13 +10,14 @@
 // Run: node benchmarks/download-glove.mjs && npx tsx benchmarks/glove.ts
 // Env knobs: N (number of base vectors, default 100000), NQ (queries, default 1000)
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as h5wasm from 'h5wasm';
 import { TurboQuantIndex } from '../src/index/turboquant-index';
 import type { Bits } from '../src/core/codebook';
 
 const HDF5_FILE = join(process.cwd(), 'benchmarks', 'datasets', 'glove-200-angular.hdf5');
+const WASM_PATH = 'glove-200-angular.hdf5';
 
 function recallAt(approx: Int32Array, truth: number[], k: number): number {
   const set = new Set(truth.slice(0, k));
@@ -29,9 +30,14 @@ async function main(): Promise<void> {
   const N = Number(process.env.N ?? 100_000);
   const NQ = Number(process.env.NQ ?? 1_000);
 
-  // h5wasm needs its WASM module loaded first.
+  // h5wasm uses an Emscripten virtual filesystem. In Node.js, load the file into a
+  // buffer and write it to the WASM VFS so the HDF5 library can open it by name.
   await h5wasm.ready;
-  const f = new h5wasm.File(HDF5_FILE, 'r');
+  process.stdout.write('loading HDF5 file into memory… ');
+  const buf = readFileSync(HDF5_FILE);
+  h5wasm.FS.writeFile(WASM_PATH, buf);
+  process.stdout.write(`${(buf.byteLength / 1024 / 1024).toFixed(0)} MB loaded\n`);
+  const f = new h5wasm.File(WASM_PATH, 'r');
 
   const trainDs = f.get('train') as h5wasm.Dataset;
   const testDs = f.get('test') as h5wasm.Dataset;
@@ -67,21 +73,56 @@ async function main(): Promise<void> {
   const queries: Float32Array[] = [];
   for (let i = 0; i < nQuery; i++) queries.push(testRaw.subarray(i * dim, (i + 1) * dim));
 
-  // Read ground truth (pre-computed 100-NN indices from the full 1.18M corpus).
-  // Note: these indices refer to the FULL train set, not just our nBase slice.
-  // We filter to keep only neighbors within [0, nBase) for a fair recall evaluation.
-  const neighborRaw = neighborsDs.slice([
-    [0, nQuery],
-    [0, 100],
-  ]) as Int32Array;
-  const groundtruth: number[][] = [];
-  for (let i = 0; i < nQuery; i++) {
-    const row: number[] = [];
-    for (let j = 0; j < 100; j++) {
-      const idx = neighborRaw[i * 100 + j]!;
-      if (idx < nBase) row.push(idx);
+  // Ground truth: use the pre-computed ann-benchmarks neighbors only when running the
+  // FULL corpus (N >= totalTrain). Otherwise compute brute-force cosine within the
+  // sub-sample — the pre-computed indices reference the full 1.18M corpus so recall
+  // numbers against them are misleadingly low (only ~N/1.18M of true neighbors land
+  // in the slice).
+  let groundtruth: number[][];
+  if (nBase >= totalTrain) {
+    const neighborRaw = neighborsDs.slice([
+      [0, nQuery],
+      [0, 100],
+    ]) as Int32Array;
+    groundtruth = [];
+    for (let i = 0; i < nQuery; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < 100; j++) row.push(neighborRaw[i * 100 + j]!);
+      groundtruth.push(row);
     }
-    groundtruth.push(row);
+    process.stdout.write(`(using pre-computed ann-benchmarks ground truth — full corpus)\n\n`);
+  } else {
+    // Brute-force cosine top-100 within the sub-sample. Normalise once, then dot.
+    process.stdout.write(
+      `(sub-sample: computing brute-force cosine ground truth within ${nBase.toLocaleString()} vectors…) `,
+    );
+    const tGT = performance.now();
+    const baseNorm: Float32Array[] = base.map((v) => {
+      let s = 0;
+      for (let i = 0; i < dim; i++) s += v[i]! * v[i]!;
+      const inv = 1 / Math.sqrt(s);
+      const u = new Float32Array(dim);
+      for (let i = 0; i < dim; i++) u[i] = v[i]! * inv;
+      return u;
+    });
+    groundtruth = queries.map((q) => {
+      let s = 0;
+      for (let i = 0; i < dim; i++) s += q[i]! * q[i]!;
+      const inv = 1 / Math.sqrt(s);
+      const qn = new Float32Array(dim);
+      for (let i = 0; i < dim; i++) qn[i] = q[i]! * inv;
+      const scores = new Float32Array(nBase);
+      for (let j = 0; j < nBase; j++) {
+        let d = 0;
+        for (let i = 0; i < dim; i++) d += qn[i]! * baseNorm[j]![i]!;
+        scores[j] = d;
+      }
+      // Partial sort: top-100 indices by descending score.
+      const idxs = Array.from({ length: nBase }, (_, i) => i);
+      idxs.sort((a, b) => scores[b]! - scores[a]!);
+      return idxs.slice(0, 100);
+    });
+    process.stdout.write(`done (${((performance.now() - tGT) / 1000).toFixed(1)}s)\n\n`);
   }
 
   f.close();
@@ -108,15 +149,12 @@ async function main(): Promise<void> {
     let r1 = 0;
     let r10 = 0;
     let r100 = 0;
-    let counted = 0;
     for (let i = 0; i < queries.length; i++) {
-      if (groundtruth[i]!.length === 0) continue; // no in-slice neighbors for this query
       r1 += recallAt(approx[i]!, groundtruth[i]!, 1);
       r10 += recallAt(approx[i]!, groundtruth[i]!, 10);
       r100 += recallAt(approx[i]!, groundtruth[i]!, 100);
-      counted++;
     }
-    const n = counted || 1;
+    const n = queries.length;
     const compression = (base.length * dim * 4) / index.toBytes().length;
 
     const row: {

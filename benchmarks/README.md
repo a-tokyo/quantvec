@@ -81,9 +81,17 @@ Env knobs: `N` (base vectors to use, default 100k), `NQ` (queries, default 1k).
 The ground truth indices refer to the full 1.18M corpus; recall is computed against
 the in-slice neighbors only (conservative — true recall is higher when using more vectors).
 
-Results after running (`N=100000, NQ=1000`): see [`results/glove-200.json`](./results/glove-200.json)
-once generated. Expected recall@10 at 4-bit: **~0.90+** (real embedding structure lifts recall
-above the synthetic isotropic floor).
+Results (`N=100000, NQ=1000`, brute-force cosine ground truth within the sub-sample):
+
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | --- | ------------ | ----------- |
+| 2    | 0.550    | 0.610     | 0.653      | ~27k           | ~69 | —            | 13.8×       |
+| 3    | 0.730    | 0.781     | 0.814      | ~20k           | ~72 | —            | 9.6×        |
+| 4    | 0.845    | 0.880     | 0.901      | ~19k           | ~71 | **~456**     | 7.4×        |
+
+Encode throughput is lower than SIFT-small because dim=200 uses the dense Householder
+rotation (O(d²) per vector); SIFT-small at dim=128 uses the fast FWHT (O(d·log d)).
+Full results: [`results/glove-200.json`](./results/glove-200.json).
 
 ## What is measured
 

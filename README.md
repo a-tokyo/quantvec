@@ -237,6 +237,19 @@ fallback when WASM is unavailable).
 | 4    | 0.887     | **~528**     | 7.8×        |
 
 True bit-packing — on par with native TurboQuant (~15.8× @ 2-bit / ~8.0× @ 4-bit).
+
+### GloVe-200 (real text embeddings)
+
+100k × 200-d word vectors · 1000 queries · brute-force cosine ground truth (`npm run bench:glove`).
+dim=200 is not a power of two → exercises the **dense Householder** rotation path.
+
+| bits | recall@1 | recall@10 | recall@100 | QPS | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | --- | ------------ | ----------- |
+| 2    | 0.550    | 0.610     | 0.653      | ~69 | —            | 13.8×       |
+| 3    | 0.730    | 0.781     | 0.814      | ~72 | —            | 9.6×        |
+| 4    | 0.845    | **0.880** | 0.901      | ~71 | **~456**     | 7.4×        |
+
+Real embedding structure consistently lifts recall above the synthetic isotropic floor.
 Full results and JSON in [`benchmarks/`](./benchmarks/).
 
 ---
@@ -253,8 +266,7 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 | ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)   |
 | ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)     |
 | ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                    |
-| ✅     | Real-dataset benchmark suite (SIFT-small + GloVe-200 harness; `npm run bench:glove`)   |
-| 📋     | GloVe-200 pre-built results (run `npm run bench:glove` — 426 MB download)              |
+| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 (results in `benchmarks/results/`)     |
 | 📋     | IVF / coarse-quantizer for 10M+ corpora                                                |
 
 Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md).

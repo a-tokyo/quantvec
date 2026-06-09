@@ -1,0 +1,41 @@
+{
+  "dataset": "glove-200-angular",
+  "source": "ann-benchmarks.com",
+  "nBase": 100000,
+  "totalTrain": 1183514,
+  "dim": 200,
+  "nQuery": 1000,
+  "metric": "cosine",
+  "note": "Ground truth from full 1,183,514-vector corpus; recall computed against in-slice neighbors only.",
+  "generatedAt": "2026-06-09T20:59:14.789Z",
+  "rows": [
+    {
+      "bits": 2,
+      "recall1": 0.55,
+      "recall10": 0.6101999999999996,
+      "recall100": 0.6525000000000004,
+      "encodeVecPerSec": 27031.73414325799,
+      "qps": 69.06147637673212,
+      "compressionVsF32": 13.79304399550002
+    },
+    {
+      "bits": 3,
+      "recall1": 0.73,
+      "recall10": 0.780599999999998,
+      "recall100": 0.8136199999999986,
+      "encodeVecPerSec": 19581.112998295244,
+      "qps": 71.75144846218575,
+      "compressionVsF32": 9.638525185165104
+    },
+    {
+      "bits": 4,
+      "recall1": 0.845,
+      "recall10": 0.8801999999999914,
+      "recall100": 0.9011799999999984,
+      "encodeVecPerSec": 19311.405333254177,
+      "qps": 70.63716607623348,
+      "compressionVsF32": 7.4073902606706925,
+      "fastScanQps": 455.50927946695805
+    }
+  ]
+}
