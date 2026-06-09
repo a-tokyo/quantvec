@@ -5,10 +5,7 @@
   "description": "Docs + landing site for quantvec (Nextra).",
   "license": "Apache-2.0",
   "scripts": {
-    "sync": "node scripts/sync-docs.mjs",
-    "predev": "node scripts/sync-docs.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/sync-docs.mjs",
     "build": "next build",
     "start": "next start"
   },

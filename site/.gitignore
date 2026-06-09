@@ -7,10 +7,6 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
-# Synced docs — single-sourced from the repo's docs/site/*.md via scripts/sync-docs.mjs.
-# Authored pages (index.mdx, _meta.js) are committed; the generated .md copies are not.
-content/docs/*.md
-
 # Editor / OS
 .DS_Store
 *.log
