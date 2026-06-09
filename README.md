@@ -253,9 +253,9 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 | ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)   |
 | ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)     |
 | ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                    |
-| ✅     | Real-dataset benchmark suite (SIFT-small; GloVe/OpenAI harness)                        |
+| ✅     | Real-dataset benchmark suite (SIFT-small + GloVe-200 harness; `npm run bench:glove`)   |
+| 📋     | GloVe-200 pre-built results (run `npm run bench:glove` — 426 MB download)              |
 | 📋     | IVF / coarse-quantizer for 10M+ corpora                                                |
-| 📋     | GloVe / DBpedia / OpenAI pre-built benchmark results                                   |
 
 Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md).
 

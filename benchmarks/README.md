@@ -1,7 +1,7 @@
 # quantvec benchmarks
 
-Two harnesses: a **synthetic** one (`flat.ts`, deterministic, no download) and a
-**real-dataset** one (`real.ts`, SIFT-small with the dataset's own ground truth).
+Three harnesses: a **synthetic** one (`flat.ts`, no download), **SIFT-small** (`real.ts`,
+10k vectors, 5 MB download), and **GloVe-200** (`glove.ts`, 100k–1.18M vectors, 426 MB download).
 
 ## Real dataset (SIFT-small)
 
@@ -63,6 +63,27 @@ const index = new TurboQuantIndex({ dim: 1536, bits: 4, fastscan: true });
 The speedup scales with `n` — on 50k × 128-d vectors the gain is **~5.7×**; on SIFT-small
 (10k vectors) it is **~1.8×** because the rescore pass is relatively larger. FastScan is
 ignored (falls back to the exact scan) when `bits ≠ 4` or WebAssembly is unavailable.
+
+## Real dataset (GloVe-200)
+
+```bash
+npm run bench:glove   # downloads HDF5 (~426 MB) then runs
+# or step-by-step:
+node benchmarks/download-glove.mjs
+N=100000 NQ=1000 npx tsx benchmarks/glove.ts
+```
+
+GloVe-200 ([ann-benchmarks](https://ann-benchmarks.com)): 1.18M Wikipedia + Gigaword word vectors,
+dim=200, cosine metric, 10k queries, 100-NN ground truth pre-computed on the full corpus.
+dim=200 is **not** a power of two → exercises the dense Householder rotation path.
+
+Env knobs: `N` (base vectors to use, default 100k), `NQ` (queries, default 1k).
+The ground truth indices refer to the full 1.18M corpus; recall is computed against
+the in-slice neighbors only (conservative — true recall is higher when using more vectors).
+
+Results after running (`N=100000, NQ=1000`): see [`results/glove-200.json`](./results/glove-200.json)
+once generated. Expected recall@10 at 4-bit: **~0.90+** (real embedding structure lifts recall
+above the synthetic isotropic floor).
 
 ## What is measured
 

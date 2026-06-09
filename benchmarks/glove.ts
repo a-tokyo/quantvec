@@ -1,0 +1,211 @@
+// GloVe-200 benchmark on the ann-benchmarks dataset (1.18M × 200-d, 10k queries,
+// 100-NN cosine ground truth pre-computed). Reads the HDF5 file produced by
+// `node benchmarks/download-glove.mjs`, then measures recall@{1,10,100},
+// encode/query throughput, and serialized compression at 2/3/4 bits.
+//
+// dim=200 exercises the *dense* rotation path (not a power of two), which is the
+// typical regime for real text embeddings (BERT-base=768, Ada-002=1536 are pow-2,
+// but many legacy models use 200/300/512).
+//
+// Run: node benchmarks/download-glove.mjs && npx tsx benchmarks/glove.ts
+// Env knobs: N (number of base vectors, default 100000), NQ (queries, default 1000)
+
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as h5wasm from 'h5wasm';
+import { TurboQuantIndex } from '../src/index/turboquant-index';
+import type { Bits } from '../src/core/codebook';
+
+const HDF5_FILE = join(process.cwd(), 'benchmarks', 'datasets', 'glove-200-angular.hdf5');
+
+function recallAt(approx: Int32Array, truth: number[], k: number): number {
+  const set = new Set(truth.slice(0, k));
+  let hit = 0;
+  for (let i = 0; i < Math.min(k, approx.length); i++) if (set.has(approx[i]!)) hit++;
+  return hit / k;
+}
+
+async function main(): Promise<void> {
+  const N = Number(process.env.N ?? 100_000);
+  const NQ = Number(process.env.NQ ?? 1_000);
+
+  // h5wasm needs its WASM module loaded first.
+  await h5wasm.ready;
+  const f = new h5wasm.File(HDF5_FILE, 'r');
+
+  const trainDs = f.get('train') as h5wasm.Dataset;
+  const testDs = f.get('test') as h5wasm.Dataset;
+  const neighborsDs = f.get('neighbors') as h5wasm.Dataset;
+
+  const [totalTrain, dim] = trainDs.shape as [number, number];
+  const [totalTest] = testDs.shape as [number, number];
+
+  const nBase = Math.min(N, totalTrain);
+  const nQuery = Math.min(NQ, totalTest);
+
+  process.stdout.write(
+    `GloVe-200 — using ${nBase.toLocaleString()} / ${totalTrain.toLocaleString()} train vectors, ` +
+      `${nQuery} queries, dim=${dim}, cosine\n`,
+  );
+  process.stdout.write(
+    `(ground truth: ann-benchmarks 100-NN cosine; rotation: dense Householder for dim=${dim})\n\n`,
+  );
+
+  // Read base vectors (slice first nBase rows).
+  const trainRaw = trainDs.slice([
+    [0, nBase],
+    [0, dim],
+  ]) as Float32Array;
+  const base: Float32Array[] = [];
+  for (let i = 0; i < nBase; i++) base.push(trainRaw.subarray(i * dim, (i + 1) * dim));
+
+  // Read query vectors (slice first nQuery rows from test set).
+  const testRaw = testDs.slice([
+    [0, nQuery],
+    [0, dim],
+  ]) as Float32Array;
+  const queries: Float32Array[] = [];
+  for (let i = 0; i < nQuery; i++) queries.push(testRaw.subarray(i * dim, (i + 1) * dim));
+
+  // Read ground truth (pre-computed 100-NN indices from the full 1.18M corpus).
+  // Note: these indices refer to the FULL train set, not just our nBase slice.
+  // We filter to keep only neighbors within [0, nBase) for a fair recall evaluation.
+  const neighborRaw = neighborsDs.slice([
+    [0, nQuery],
+    [0, 100],
+  ]) as Int32Array;
+  const groundtruth: number[][] = [];
+  for (let i = 0; i < nQuery; i++) {
+    const row: number[] = [];
+    for (let j = 0; j < 100; j++) {
+      const idx = neighborRaw[i * 100 + j]!;
+      if (idx < nBase) row.push(idx);
+    }
+    groundtruth.push(row);
+  }
+
+  f.close();
+
+  process.stdout.write(
+    'bits | recall@1 | recall@10 | recall@100 | encode (vec/s) |   QPS | fastScan QPS | compression\n',
+  );
+  process.stdout.write(
+    '-----|----------|-----------|------------|----------------|-------|--------------|------------\n',
+  );
+
+  const rows = ([2, 3, 4] as Bits[]).map((bits) => {
+    const index = new TurboQuantIndex({ dim, bits, metric: 'cosine', seed: 1 });
+
+    const tE = performance.now();
+    index.add(base);
+    const encS = (performance.now() - tE) / 1000;
+
+    const approx: Int32Array[] = [];
+    const tS = performance.now();
+    for (const q of queries) approx.push(index.search(q, 100).indices);
+    const qps = queries.length / ((performance.now() - tS) / 1000);
+
+    let r1 = 0;
+    let r10 = 0;
+    let r100 = 0;
+    let counted = 0;
+    for (let i = 0; i < queries.length; i++) {
+      if (groundtruth[i]!.length === 0) continue; // no in-slice neighbors for this query
+      r1 += recallAt(approx[i]!, groundtruth[i]!, 1);
+      r10 += recallAt(approx[i]!, groundtruth[i]!, 10);
+      r100 += recallAt(approx[i]!, groundtruth[i]!, 100);
+      counted++;
+    }
+    const n = counted || 1;
+    const compression = (base.length * dim * 4) / index.toBytes().length;
+
+    const row: {
+      bits: Bits;
+      recall1: number;
+      recall10: number;
+      recall100: number;
+      encodeVecPerSec: number;
+      qps: number;
+      fastScanQps?: number;
+      compressionVsF32: number;
+    } = {
+      bits,
+      recall1: r1 / n,
+      recall10: r10 / n,
+      recall100: r100 / n,
+      encodeVecPerSec: base.length / encS,
+      qps,
+      compressionVsF32: compression,
+    };
+    return row;
+  });
+
+  // FastScan QPS — 4-bit only.
+  {
+    const fsIndex = new TurboQuantIndex({
+      dim,
+      bits: 4,
+      metric: 'cosine',
+      fastscan: true,
+      seed: 1,
+    });
+    fsIndex.add(base);
+    const tFs = performance.now();
+    for (const q of queries) fsIndex.search(q, 100);
+    const fsSecs = (performance.now() - tFs) / 1000;
+    rows.find((r) => r.bits === 4)!.fastScanQps = queries.length / fsSecs;
+  }
+
+  for (const row of rows) {
+    const fsCol =
+      row.fastScanQps !== undefined
+        ? Math.round(row.fastScanQps).toString().padStart(12)
+        : '           —';
+    process.stdout.write(
+      `  ${row.bits}  |  ${row.recall1.toFixed(3)}   |   ${row.recall10.toFixed(3)}   |   ${row.recall100.toFixed(
+        3,
+      )}    | ${Math.round(row.encodeVecPerSec).toString().padStart(14)} | ${Math.round(row.qps)
+        .toString()
+        .padStart(5)} | ${fsCol} | ${row.compressionVsF32.toFixed(2)}x\n`,
+    );
+  }
+
+  process.stdout.write('\n');
+  for (const r of rows) {
+    process.stdout.write(`METRIC glove_recall_at10_${r.bits}bit=${r.recall10.toFixed(4)}\n`);
+    process.stdout.write(`METRIC glove_qps_${r.bits}bit=${Math.round(r.qps)}\n`);
+  }
+  {
+    const row4 = rows.find((r) => r.bits === 4)!;
+    if (row4.fastScanQps !== undefined)
+      process.stdout.write(`METRIC glove_fastscan_qps_4bit=${Math.round(row4.fastScanQps)}\n`);
+  }
+
+  const outDir = join(process.cwd(), 'benchmarks', 'results');
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(
+    join(outDir, 'glove-200.json'),
+    JSON.stringify(
+      {
+        dataset: 'glove-200-angular',
+        source: 'ann-benchmarks.com',
+        nBase,
+        totalTrain,
+        dim,
+        nQuery,
+        metric: 'cosine',
+        note: `Ground truth from full ${totalTrain.toLocaleString()}-vector corpus; recall computed against in-slice neighbors only.`,
+        generatedAt: new Date().toISOString(),
+        rows,
+      },
+      null,
+      2,
+    ),
+  );
+  process.stdout.write(`\nwrote ${join(outDir, 'glove-200.json')}\n`);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
