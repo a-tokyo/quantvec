@@ -37,6 +37,9 @@
     "outDir": "dist",
     "rootDir": "src"
   },
+  // The isomorphic core. src/node.ts is the Node-only entry; it imports `node:*`
+  // and is typechecked separately (tsconfig.build.json) with @types/node so those
+  // globals never leak into the core's type surface.
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "build", "assembly", "test", "benchmarks"]
+  "exclude": ["node_modules", "dist", "build", "assembly", "test", "benchmarks", "src/node.ts"]
 }

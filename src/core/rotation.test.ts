@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createDenseRotation, RotationError } from './rotation';
+import {
+  createDenseRotation,
+  createHadamardRotation,
+  createRotation,
+  RotationError,
+} from './rotation';
 import { createRng } from './rng';
 
 /** Dot product of two equal-length Float32Arrays. */
@@ -251,4 +256,78 @@ describe('createDenseRotation — Haar-ness across seeds (fixed canonical input)
       expect(Math.abs(variance - expected)).toBeLessThan(0.15 * expected);
     });
   }
+});
+
+describe('createHadamardRotation', () => {
+  it('requires a power-of-two dim', () => {
+    for (const bad of [0, 7, 24, 768, 1536]) {
+      let err: unknown;
+      try {
+        createHadamardRotation(bad);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(RotationError);
+      expect((err as RotationError).code).toBe('INVALID_DIM');
+    }
+  });
+
+  it('preserves the Euclidean norm (orthonormal)', () => {
+    const rng = createRng(5);
+    const rot = createHadamardRotation(64, 3);
+    const y = new Float32Array(64);
+    for (let t = 0; t < 5; t++) {
+      rot.apply(randomUnitVector(64, rng), y);
+      expect(norm(y)).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('applyTranspose is the exact inverse of apply', () => {
+    const rot = createHadamardRotation(128, 2);
+    const x = randomUnitVector(128, createRng(8));
+    const y = new Float32Array(128);
+    const back = new Float32Array(128);
+    rot.apply(x, y);
+    rot.applyTranspose(y, back);
+    for (let i = 0; i < 128; i++) expect(back[i]).toBeCloseTo(x[i]!, 5);
+  });
+
+  it('is deterministic in (dim, seed)', () => {
+    const x = randomUnitVector(32, createRng(1));
+    const ya = new Float32Array(32);
+    const yb = new Float32Array(32);
+    createHadamardRotation(32, 7).apply(x, ya);
+    createHadamardRotation(32, 7).apply(x, yb);
+    expect(Array.from(ya)).toEqual(Array.from(yb));
+  });
+
+  it('validates src/dst length', () => {
+    let err: unknown;
+    try {
+      createHadamardRotation(16, 0).apply(new Float32Array(8), new Float32Array(16));
+    } catch (e) {
+      err = e;
+    }
+    expect((err as RotationError).code).toBe('INVALID_LENGTH');
+  });
+});
+
+describe('createRotation — dispatch', () => {
+  it('uses the Hadamard rotation for a power-of-two dim', () => {
+    const x = randomUnitVector(64, createRng(2));
+    const a = new Float32Array(64);
+    const b = new Float32Array(64);
+    createRotation(64, 4).apply(x, a);
+    createHadamardRotation(64, 4).apply(x, b);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it('uses the dense rotation for a non-power-of-two dim', () => {
+    const x = randomUnitVector(24, createRng(2));
+    const a = new Float32Array(24);
+    const b = new Float32Array(24);
+    createRotation(24, 4).apply(x, a);
+    createDenseRotation(24, 4).apply(x, b);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
 });

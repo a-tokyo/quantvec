@@ -1,0 +1,37 @@
+{
+  "dataset": "siftsmall",
+  "base": 10000,
+  "dim": 128,
+  "queries": 100,
+  "metric": "euclidean",
+  "generatedAt": "2026-06-09T17:17:32.807Z",
+  "rows": [
+    {
+      "bits": 2,
+      "recall1": 0.62,
+      "recall10": 0.6699999999999998,
+      "recall100": 0.7440999999999999,
+      "encodeVecPerSec": 254790.86447355433,
+      "qps": 993.2381143763747,
+      "compressionVsF32": 12.799200049996875
+    },
+    {
+      "bits": 3,
+      "recall1": 0.72,
+      "recall10": 0.8010000000000003,
+      "recall100": 0.8634999999999997,
+      "encodeVecPerSec": 191040.82345625194,
+      "qps": 1039.4852851398573,
+      "compressionVsF32": 9.142448997812597
+    },
+    {
+      "bits": 4,
+      "recall1": 0.86,
+      "recall10": 0.8880000000000001,
+      "recall100": 0.9276000000000002,
+      "encodeVecPerSec": 171047.25821935516,
+      "qps": 1084.0598078831383,
+      "compressionVsF32": 7.110864206103955
+    }
+  ]
+}

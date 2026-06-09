@@ -1,0 +1,40 @@
+{
+  "dim": 768,
+  "n": 5000,
+  "nq": 500,
+  "anisotropy": 0.3,
+  "metric": "cosine",
+  "generatedAt": "2026-06-09T09:17:32.891Z",
+  "rows": [
+    {
+      "bits": 2,
+      "recall1": 0.476,
+      "recall10": 0.6247999999999997,
+      "recall100": 0.7165399999999997,
+      "encodeVecPerSec": 1946.0413971516093,
+      "qps": 209.3739582847338,
+      "bytesPerVector": 200.005,
+      "compressionVsF32": 15.35961600959976
+    },
+    {
+      "bits": 3,
+      "recall1": 0.7,
+      "recall10": 0.7943999999999997,
+      "recall100": 0.8468599999999996,
+      "encodeVecPerSec": 1787.0383164439545,
+      "qps": 211.75586323652382,
+      "bytesPerVector": 296.005,
+      "compressionVsF32": 10.378203070894072
+    },
+    {
+      "bits": 4,
+      "recall1": 0.85,
+      "recall10": 0.8871999999999977,
+      "recall100": 0.92254,
+      "encodeVecPerSec": 1816.5062840147564,
+      "qps": 210.82532157581582,
+      "bytesPerVector": 392.005,
+      "compressionVsF32": 7.836634736801827
+    }
+  ]
+}

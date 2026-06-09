@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { encodeVector, scoreCodes, createEncodeScratch, EncodeError } from './encode';
 import { createDenseRotation } from './rotation';
-import { buildCodebook } from './codebook';
+import { getCodebook } from './codebook';
 import { createRng } from './rng';
+import { identityCalibration } from './calibrate';
 import type { Bits } from './codebook';
 
 /** Exact float dot product. */
@@ -21,7 +22,7 @@ function randomVector(d: number, scale: number, rng: ReturnType<typeof createRng
 
 describe('encodeVector — argument validation', () => {
   const rotation = createDenseRotation(8, 1);
-  const codebook = buildCodebook(8, 2);
+  const codebook = getCodebook(8, 2);
 
   it('rejects bad dim', () => {
     let err: unknown;
@@ -116,7 +117,7 @@ describe('encodeVector — basic invariants', () => {
   const d = 64;
   const bits: Bits = 4;
   const rotation = createDenseRotation(d, 7);
-  const codebook = buildCodebook(d, bits);
+  const codebook = getCodebook(d, bits);
 
   it('is deterministic for the same input', () => {
     const rng = createRng(5);
@@ -195,7 +196,7 @@ describe('encodeVector — self-score recovers ‖v‖²', () => {
     for (const bits of [2, 3, 4] as const) {
       it(`self dot ≈ ‖v‖² (d=${d}, bits=${bits})`, () => {
         const rotation = createDenseRotation(d, 100 + d);
-        const codebook = buildCodebook(d, bits);
+        const codebook = getCodebook(d, bits);
         const rng = createRng(7 * d + bits);
         const qRot = new Float32Array(d);
         let worstRel = 0;
@@ -233,7 +234,7 @@ describe('encodeVector — UNBIASEDNESS (key)', () => {
       const meanErr: Record<number, number> = {};
 
       for (const bits of [2, 3, 4] as const) {
-        const codebook = buildCodebook(d, bits);
+        const codebook = getCodebook(d, bits);
         const enc = encodeVector(v, { dim: d, bits, rotation, codebook });
         // Same query stream per bit-width so the comparison is apples-to-apples.
         const qRng = createRng(999);
@@ -279,7 +280,7 @@ describe('encodeVector — recall sanity (top-1)', () => {
     const bits: Bits = 4;
     const n = 200;
     const rotation = createDenseRotation(d, 314);
-    const codebook = buildCodebook(d, bits);
+    const codebook = getCodebook(d, bits);
 
     // Build a database of n vectors; encode each.
     const dbRng = createRng(2718);
@@ -321,5 +322,45 @@ describe('encodeVector — recall sanity (top-1)', () => {
     // At 4-bit the estimated top-1 should fall inside the exact top-5 for the
     // large majority of queries.
     expect(hits / NUM_QUERIES).toBeGreaterThan(0.8);
+  });
+});
+
+describe('encodeVector — TQ+ calibration', () => {
+  const dim = 32;
+  const rotation = createDenseRotation(dim, 5);
+  const codebook = getCodebook(dim, 4);
+  const v = randomVector(dim, 3, createRng(7));
+
+  it('identity calibration reproduces the un-calibrated encoding exactly', () => {
+    const a = encodeVector(v, { dim, bits: 4, rotation, codebook });
+    const b = encodeVector(v, {
+      dim,
+      bits: 4,
+      rotation,
+      codebook,
+      calibration: identityCalibration(dim),
+    });
+    expect(Array.from(b.codes)).toEqual(Array.from(a.codes));
+    expect(b.scale).toBeCloseTo(a.scale, 6);
+    expect(b.norm).toBe(a.norm);
+  });
+
+  it('rejects a calibration of the wrong length', () => {
+    const bad = { shift: new Float32Array(dim - 1), scale: new Float32Array(dim - 1).fill(1) };
+    let err: unknown;
+    try {
+      encodeVector(v, { dim, bits: 4, rotation, codebook, calibration: bad });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as EncodeError).code).toBe('MISMATCH');
+  });
+
+  it('a non-identity calibration yields a finite positive scale and dim codes', () => {
+    const cal = { shift: new Float32Array(dim).fill(0.01), scale: new Float32Array(dim).fill(1.2) };
+    const enc = encodeVector(v, { dim, bits: 4, rotation, codebook, calibration: cal });
+    expect(Number.isFinite(enc.scale)).toBe(true);
+    expect(enc.scale).toBeGreaterThan(0);
+    expect(enc.codes.length).toBe(dim);
   });
 });

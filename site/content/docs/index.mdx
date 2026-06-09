@@ -1,0 +1,24 @@
+---
+title: Documentation
+---
+
+# Documentation
+
+**quantvec** is a data-oblivious, zero-training vector quantization and nearest-neighbor search
+library for TypeScript — a clean-room implementation of Google Research's
+[TurboQuant](https://arxiv.org/abs/2504.19874) with the
+[RaBitQ](https://arxiv.org/abs/2405.12497) unbiased-estimator correction. It runs anywhere
+JavaScript runs: Node, browsers, Bun, Cloudflare Workers, and React Native.
+
+These pages are rendered directly from the repo's canonical docs.
+
+- [**Getting Started**](/docs/getting-started) — install and run your first index. **Start here.**
+- [**Usage Guide**](/docs/guide) — end-to-end walkthrough: building, searching, filtering, and persisting.
+- [**Architecture**](/docs/architecture) — the encode pipeline and flat-scan search path, end to end.
+- [**Serialization Format**](/docs/serialization) — the versioned `QVEC` binary layout, field by field.
+- [**API Reference**](/docs/api-reference) — `TurboQuantIndex`, `IdMapIndex`, options, and result types.
+- [**Benchmarks**](/docs/benchmarks) — recall@k, throughput, and compression vs float32.
+- [**Roadmap**](/docs/roadmap) — what's shipped and what's next (WASM-SIMD kernel, IVF, filter DSL).
+
+Everything here lives in the [GitHub repository](https://github.com/a-tokyo/quantvec). quantvec is
+an independent clean-room implementation and is not affiliated with or endorsed by Google.

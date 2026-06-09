@@ -63,18 +63,30 @@
   },
   "scripts": {
     "build": "tsup",
-    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
+    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release && node scripts/inline-wasm.mjs",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run --test-timeout=30000",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --test-timeout=30000",
     "bench": "vitest bench --run",
+    "bench:flat": "bun run benchmarks/flat.ts",
+    "bench:real": "node benchmarks/download-siftsmall.mjs && bun run benchmarks/real.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepare": "husky",
     "prepublishOnly": "bun run build"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix --no-warn-ignored",
+      "prettier --write"
+    ],
+    "*.{js,cjs,mjs,json,md,yml,yaml}": [
+      "prettier --write --ignore-unknown"
+    ]
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildQueryLut, searchFlat, SearchError } from './search';
 import type { EncodedDb } from './search';
-import { buildCodebook } from './codebook';
+import { getCodebook } from './codebook';
 import type { Bits } from './codebook';
 import { createDenseRotation } from './rotation';
 import type { Rotation } from './rotation';
 import { encodeVector, scoreCodes, createEncodeScratch } from './encode';
 import { createRng } from './rng';
+import { identityCalibration } from './calibrate';
 import type { Distance } from './metrics';
 
 // ── Shared fixtures / helpers ─────────────────────────────────────────────────
@@ -14,7 +15,7 @@ import type { Distance } from './metrics';
 /** Build an EncodedDb from raw vectors via the real encode pipeline. */
 function buildDb(vectors: Float32Array[], dim: number, bits: Bits, seed = 7): EncodedDb {
   const rotation = createDenseRotation(dim, seed);
-  const codebook = buildCodebook(dim, bits);
+  const codebook = getCodebook(dim, bits);
   const n = vectors.length;
   const codes = new Uint8Array(n * dim);
   const scales = new Float32Array(n);
@@ -130,7 +131,7 @@ describe('LUT-sum equals scale·scoreCodes for random inputs', () => {
     const levels = 1 << bits;
     const rng = createRng(12321);
     const rotation = createDenseRotation(dim, 5);
-    const codebook = buildCodebook(dim, bits);
+    const codebook = getCodebook(dim, bits);
 
     for (let trial = 0; trial < 20; trial++) {
       // encode a random vector
@@ -413,5 +414,30 @@ describe('searchFlat validation', () => {
       expect((err as SearchError).code).toBe('MISMATCH');
     }
     expect(rotation.dim).toBe(dim);
+  });
+});
+
+describe('searchFlat — TQ+ calibration', () => {
+  const dim = 32;
+  const bits: Bits = 4;
+  const rng = createRng(11);
+  const vectors = randomVectors(40, dim, rng);
+  const db = buildDb(vectors, dim, bits, 3);
+  const query = vectors[5]!;
+
+  it('an identity calibration on the query side leaves results unchanged', () => {
+    const plain = searchFlat(db, query, 10, { metric: 'cosine' });
+    const withId = searchFlat({ ...db, calibration: identityCalibration(dim) }, query, 10, {
+      metric: 'cosine',
+    });
+    expect(Array.from(withId.indices)).toEqual(Array.from(plain.indices));
+    expect(Array.from(withId.scores)).toEqual(Array.from(plain.scores));
+  });
+
+  it('a non-identity calibration still returns k ranked results', () => {
+    const cal = { shift: new Float32Array(dim).fill(0.02), scale: new Float32Array(dim).fill(1.1) };
+    const res = searchFlat({ ...db, calibration: cal }, query, 5, { metric: 'dot' });
+    expect(res.indices.length).toBe(5);
+    expect(res.scores.every((s) => Number.isFinite(s))).toBe(true);
   });
 });

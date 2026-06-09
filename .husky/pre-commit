@@ -1,0 +1,4 @@
+# Auto-fix + check staged files, then typecheck the project. Mirrors CI's quality gate
+# (prettier, eslint, tsc) so issues are caught before they reach CI.
+npx lint-staged
+npm run typecheck

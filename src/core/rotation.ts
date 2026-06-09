@@ -24,15 +24,14 @@
 // the R diagonal to be positive — the standard QR uniqueness convention.
 //
 // Performance note: this dense rotation costs O(d²) per applied vector and O(d³)
-// to build. That is fine for validation and the small/medium dimensions exercised
-// here. The PLANNED performance path is a structured O(d log d) transform — a
-// randomized Hadamard transform (sign-flip diagonal + fast Walsh–Hadamard
-// transform), which is also a valid TurboQuant rotation. It is intentionally NOT
-// implemented in this wave; the `Rotation` interface below is the seam: a future
-// `createHadamardRotation` would implement the same interface and be a drop-in
-// replacement. (FWHT requires dim to be a power of two; the multiple-of-8 dim
-// validation here is the shared, weaker precondition.)
+// to build. For power-of-two dimensions we instead use {@link createHadamardRotation}
+// — a randomized Hadamard transform (a few rounds of sign-flip + fast Walsh–Hadamard
+// transform), an exact orthonormal map that costs O(d·log d) per apply and ~nothing to
+// build, with equal-or-better recall (measured). FWHT is exact only at a power-of-two
+// length (no zero-padding/truncation), so {@link createRotation} dispatches to the
+// Hadamard rotation when dim is a power of two and to the dense rotation otherwise.
 
+import { fwht, isPow2 } from './fwht';
 import { createRng } from './rng';
 
 /** Discriminated, code-tagged error for the rotation module. */
@@ -203,4 +202,86 @@ export function createDenseRotation(dim: number, seed = 0): Rotation {
       }
     },
   };
+}
+
+/** Rounds of (sign-flip + normalized FWHT) in the randomized Hadamard rotation. */
+const HADAMARD_ROUNDS = 3;
+
+/**
+ * Create a deterministic orthonormal rotation via a Randomized Hadamard Transform:
+ * `HADAMARD_ROUNDS` rounds of (random ±1 diagonal sign-flip + normalized FWHT). This
+ * is an exact orthonormal map (norm-preserving; `applyTranspose` is its exact inverse)
+ * costing O(d·log d) per apply and ~O(d) to build — no dense matrix.
+ *
+ * `dim` MUST be a power of two so the FWHT is exact (no zero-padding/truncation, which
+ * would lose energy and degrade recall). Use {@link createRotation} to pick this when
+ * applicable and fall back to {@link createDenseRotation} otherwise.
+ *
+ * @throws {RotationError} code `'INVALID_DIM'` if dim is not a power of two.
+ */
+export function createHadamardRotation(dim: number, seed = 0): Rotation {
+  if (!isPow2(dim)) {
+    throw new RotationError(
+      'INVALID_DIM',
+      `Hadamard rotation requires a power-of-two dim, got ${dim}`,
+    );
+  }
+  const rng = createRng(seed);
+  const signs: Float64Array[] = [];
+  for (let r = 0; r < HADAMARD_ROUNDS; r++) {
+    const s = new Float64Array(dim);
+    for (let i = 0; i < dim; i++) s[i] = rng.nextFloat() < 0.5 ? -1 : 1;
+    signs.push(s);
+  }
+  const invSqrt = 1 / Math.sqrt(dim);
+  const buf = new Float64Array(dim);
+
+  function checkLengths(src: Float32Array, dst: Float32Array): void {
+    if (src.length !== dim || dst.length !== dim) {
+      throw new RotationError(
+        'INVALID_LENGTH',
+        `src and dst must have length ${dim}, got src=${src.length}, dst=${dst.length}`,
+      );
+    }
+  }
+
+  return {
+    dim,
+    // y = (∏_{r} F·D_r) x — for each round apply the sign diagonal then the
+    // normalized FWHT (F = fwht / √dim, an orthonormal involution).
+    apply(src: Float32Array, dst: Float32Array): void {
+      checkLengths(src, dst);
+      for (let i = 0; i < dim; i++) buf[i] = src[i]!;
+      for (let r = 0; r < HADAMARD_ROUNDS; r++) {
+        const s = signs[r]!;
+        for (let i = 0; i < dim; i++) buf[i] *= s[i]!;
+        fwht(buf);
+        for (let i = 0; i < dim; i++) buf[i] *= invSqrt;
+      }
+      for (let i = 0; i < dim; i++) dst[i] = buf[i]!;
+    },
+    // Exact inverse: the transpose of (∏ F·D_r) is (∏ D_r·F) in reverse order; since
+    // F and each D_r are symmetric orthonormal, undo the rounds back-to-front.
+    applyTranspose(src: Float32Array, dst: Float32Array): void {
+      checkLengths(src, dst);
+      for (let i = 0; i < dim; i++) buf[i] = src[i]!;
+      for (let r = HADAMARD_ROUNDS - 1; r >= 0; r--) {
+        fwht(buf);
+        const s = signs[r]!;
+        for (let i = 0; i < dim; i++) buf[i] = buf[i]! * invSqrt * s[i]!;
+      }
+      for (let i = 0; i < dim; i++) dst[i] = buf[i]!;
+    },
+  };
+}
+
+/**
+ * Build the fastest exact orthonormal rotation for `dim`: a Randomized Hadamard
+ * transform ({@link createHadamardRotation}, O(d·log d)) when `dim` is a power of two,
+ * else the dense Householder rotation ({@link createDenseRotation}, O(d²)). The choice
+ * is a deterministic function of `dim`, so a serialized index rebuilds the identical
+ * rotation from its stored `dim`/`seed` with no extra format field.
+ */
+export function createRotation(dim: number, seed = 0): Rotation {
+  return isPow2(dim) ? createHadamardRotation(dim, seed) : createDenseRotation(dim, seed);
 }

@@ -34,13 +34,15 @@
 // unbiased) estimator of ⟨q, v⟩ — verified empirically in encode.test.ts. The
 // single per-vector float is all the query loop needs after scoring the codes.
 //
-// ── Per-coordinate empirical calibration (TQ+) — OUT OF SCOPE this wave ────────
-// TurboQuant+ refines accuracy by remapping each coordinate's empirical
-// percentile to the Beta percentile before quantizing. We deliberately default
-// to the identity map (no calibration) here and leave this comment as the hook:
-// a future `calibration?: { apply(coord, i): number }` would slot in between
-// step 2 and step 3 without changing the rest of the pipeline or its callers.
+// ── Per-coordinate empirical calibration (TQ+) — optional ─────────────────────
+// TurboQuant+ refines accuracy by remapping each coordinate onto the canonical
+// marginal before quantizing (see ./calibrate). When a `calibration` is supplied we
+// quantize cal_i = (o_rot_i + shift_i)·scale_i, and the reconstruction used for the
+// RaBitQ inner product is the *de-calibrated* level r_i = c_i/scale_i − shift_i, so
+// step 5 is unchanged: inner = ⟨o_rot, r⟩. With the identity calibration this is
+// exactly the un-calibrated pipeline above (shift 0, scale 1 → r_i = c_i).
 
+import type { Calibration } from './calibrate';
 import { quantizeCoord } from './codebook';
 import type { Rotation } from './rotation';
 
@@ -82,6 +84,8 @@ export interface EncodeOptions {
   codebook: EncodeCodebook;
   /** Optional reusable scratch buffers (allocated on demand if omitted). */
   scratch?: EncodeScratch;
+  /** Optional per-coordinate TQ+ calibration (length dim each); identity if omitted. */
+  calibration?: Calibration;
 }
 
 /** The encoded representation of one database vector. */
@@ -142,6 +146,16 @@ export function encodeVector(vec: Float32Array, opts: EncodeOptions): EncodedVec
         `got ${codebook.centroids.length}/${codebook.boundaries.length}`,
     );
   }
+  if (
+    opts.calibration !== undefined &&
+    (opts.calibration.shift.length !== dim || opts.calibration.scale.length !== dim)
+  ) {
+    throw new EncodeError(
+      'MISMATCH',
+      `calibration shift/scale must have length ${dim}, got ` +
+        `${opts.calibration.shift.length}/${opts.calibration.scale.length}`,
+    );
+  }
 
   // ── Step 1: norm and unit direction ──────────────────────────────────────
   let normSq = 0;
@@ -171,14 +185,27 @@ export function encodeVector(vec: Float32Array, opts: EncodeOptions): EncodedVec
   // ── Step 2: rotate the unit direction (‖o_rot‖ = 1) ──────────────────────
   rotation.apply(unit, rotated);
 
-  // ── Steps 3-5: quantize each coordinate, reconstruct, accumulate ⟨o_rot,c⟩ ─
+  // ── Steps 3-5: quantize each coordinate, reconstruct, accumulate ⟨o_rot, r⟩ ─
+  // Without calibration r = c (the centroid). With TQ+ calibration we quantize the
+  // calibrated coordinate and accumulate against the de-calibrated reconstruction
+  // r_i = c_i/scale_i − shift_i, so the RaBitQ scale below is unchanged in form.
   const { boundaries, centroids } = codebook;
   const codes = new Uint8Array(dim);
   let inner = 0;
-  for (let i = 0; i < dim; i++) {
-    const code = quantizeCoord(rotated[i]!, boundaries);
-    codes[i] = code;
-    inner += rotated[i]! * centroids[code]!;
+  const calibration = opts.calibration;
+  if (calibration === undefined) {
+    for (let i = 0; i < dim; i++) {
+      const code = quantizeCoord(rotated[i]!, boundaries);
+      codes[i] = code;
+      inner += rotated[i]! * centroids[code]!;
+    }
+  } else {
+    const { shift, scale: scaleCal } = calibration;
+    for (let i = 0; i < dim; i++) {
+      const code = quantizeCoord((rotated[i]! + shift[i]!) * scaleCal[i]!, boundaries);
+      codes[i] = code;
+      inner += rotated[i]! * (centroids[code]! / scaleCal[i]! - shift[i]!);
+    }
   }
 
   // ── RaBitQ scale = norm / ⟨o_rot, c⟩ ─────────────────────────────────────

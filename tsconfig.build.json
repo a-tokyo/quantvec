@@ -1,0 +1,14 @@
+{
+  // Node-aware config for (a) typechecking the Node-only entry src/node.ts and
+  // (b) tsup's .d.ts generation, which must resolve `node:*` imports. @types/node
+  // supplies TextEncoder/TextDecoder here, so the ambient src/globals.d.ts is
+  // excluded to avoid duplicating those globals. The isomorphic guarantee is still
+  // enforced by the base tsconfig.json pass (types: [], src/node.ts excluded), which
+  // would flag any accidental use of Node globals in the core.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "build", "assembly", "test", "benchmarks", "src/globals.d.ts"]
+}

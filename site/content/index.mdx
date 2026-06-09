@@ -1,0 +1,80 @@
+---
+title: Zero-training vector quantization & search for TypeScript
+---
+
+import { Cards } from 'nextra/components'
+
+# quantvec
+
+**Data-oblivious, zero-training vector quantization & search for TypeScript.**
+Clean-room [TurboQuant](https://arxiv.org/abs/2504.19874) +
+[RaBitQ](https://arxiv.org/abs/2405.12497). Runs in Node, browsers, Bun, and edge runtimes.
+
+[Get started →](/docs/getting-started) · [GitHub](https://github.com/a-tokyo/quantvec) · [Architecture](/docs/architecture)
+
+---
+
+## Why quantvec
+
+<Cards>
+  <Cards.Card title="Zero training, instant ingest" href="/docs/architecture" arrow>
+    A data-independent random rotation makes every coordinate follow a known distribution, so an
+    optimal scalar quantizer works with no fit step. Add vectors and search immediately.
+  </Cards.Card>
+  <Cards.Card title="2–4 bit compression" href="/docs/benchmarks" arrow>
+    Bit-pack to 2, 3, or 4 bits per coordinate — about 16× smaller than float32 at 4-bit / d=1536,
+    with the RaBitQ unbiased inner-product estimate preserving recall.
+  </Cards.Card>
+  <Cards.Card title="Isomorphic" href="/docs/getting-started" arrow>
+    One package for Node, browsers, Bun, Cloudflare Workers, and React Native. Standard ESM/CJS
+    builds with TypeScript types.
+  </Cards.Card>
+  <Cards.Card title="Filtered search" href="/docs/guide" arrow>
+    Restrict results by an allowlist mask or a per-id predicate. A qdrant-style filter DSL lands
+    with the ergonomic layer.
+  </Cards.Card>
+</Cards>
+
+## Quick start
+
+```bash
+npm install quantvec   # or: bun add quantvec / pnpm add quantvec
+```
+
+```ts
+import { TurboQuantIndex } from 'quantvec';
+
+// No training, no fit step — construct and add.
+const index = new TurboQuantIndex({ dim: 768, bits: 4 });
+
+index.add(vectors);                  // Float32Array (flat) | number[][] | Float32Array[]
+
+const { indices, scores } = index.search(query, 10); // top-10, best-first
+```
+
+Need stable external ids, payload filtering, and persistence? Reach for the id-keyed index:
+
+```ts
+import { IdMapIndex } from 'quantvec';
+
+const index = new IdMapIndex({ dim: 768, bits: 4, metric: 'cosine' });
+index.addWithIds(['a', 'b', 'c'], vectors);
+
+const { ids, scores } = index.search(query, 10, {
+  filter: id => id !== 'b',          // optional allowlist predicate
+});
+
+const bytes = index.toBytes();       // versioned, self-describing binary
+const restored = IdMapIndex.fromBytes<string>(bytes);
+```
+
+## How it works
+
+1. **Normalize** each vector (store its norm).
+2. **Random rotation** (data-independent) so each coordinate follows a known Beta distribution.
+3. **Lloyd-Max scalar quantization** — the MSE-optimal codebook for that known distribution.
+4. **Bit-pack** to 2/3/4 bits per coordinate.
+5. **RaBitQ length-renormalization scale** per vector → an unbiased inner-product estimate at query time.
+
+Read the [Architecture](/docs/architecture) page for the full pipeline, or jump to the
+[API Reference](/docs/api-reference).

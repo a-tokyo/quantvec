@@ -4,7 +4,10 @@ coverage
 node_modules
 local
 .agents
+site
 benchmarks/datasets
+benchmarks/results
+src/wasm/wasm-binary.ts
 bun.lock
 bun.lockb
 *.wasm

@@ -75,7 +75,9 @@ function validateBits(bits: number): asserts bits is Bits {
  * dimension `dim` at `bits` bits per coordinate (n = 2^bits levels).
  *
  * Deterministic in (dim, bits): no RNG. The result is symmetric about 0 because
- * the coordinate density is symmetric.
+ * the coordinate density is symmetric. The Lloyd-Max iteration with adaptive
+ * quadrature is non-trivial (~0.5s at 4 bits); callers that may rebuild the same
+ * (dim, bits) — e.g. constructing several indexes — should use {@link getCodebook}.
  *
  * @throws {CodebookError} `'INVALID_DIM'` / `'INVALID_BITS'` on bad arguments.
  */
@@ -133,6 +135,25 @@ export function buildCodebook(dim: number, bits: Bits): Codebook {
   for (let i = 0; i <= n; i++) bOut[i] = boundaries[i]!;
 
   return { boundaries: bOut, centroids: cOut };
+}
+
+/** Process-wide cache of immutable codebooks, keyed by `dim:bits`. */
+const codebookCache = new Map<string, Codebook>();
+
+/**
+ * Cached {@link buildCodebook}. A codebook is a pure, immutable function of
+ * (dim, bits), so it is built once per (dim, bits) and shared. Callers MUST treat the
+ * result as read-only (the index and encoder do). Used by the index so constructing
+ * many indexes of the same shape pays the Lloyd-Max cost only once.
+ */
+export function getCodebook(dim: number, bits: Bits): Codebook {
+  const key = `${dim}:${bits}`;
+  let cb = codebookCache.get(key);
+  if (cb === undefined) {
+    cb = buildCodebook(dim, bits);
+    codebookCache.set(key, cb);
+  }
+  return cb;
 }
 
 /**

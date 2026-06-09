@@ -1,0 +1,33 @@
+{
+  "name": "quantvec-site",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Docs + landing site for quantvec (Nextra).",
+  "license": "Apache-2.0",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "predev": "node scripts/sync-docs.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/sync-docs.mjs",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^15.1.0",
+    "nextra": "^4.0.0",
+    "nextra-theme-docs": "^4.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  },
+  "comments": {
+    "overrides.zod": "Pin zod to 4.3.6 — zod 4.4.x has a regression that makes Nextra's internal schema validation throw 'Invalid input: expected nonoptional, received undefined'. See colinhacks/zod#4968."
+  },
+  "overrides": {
+    "zod": "4.3.6"
+  }
+}

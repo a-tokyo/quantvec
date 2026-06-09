@@ -33,6 +33,7 @@
 // reused via `buildQueryLut`'s `out` param) and shared across all n vectors — the
 // scan never allocates per candidate.
 
+import type { Calibration } from './calibrate';
 import { scoreMetric } from './metrics';
 import type { Distance, QueryNorms } from './metrics';
 import type { Rotation } from './rotation';
@@ -76,6 +77,13 @@ export interface EncodedDb {
   centroids: Float32Array;
   /** Frozen orthonormal rotation Q (same dim) applied to the query. */
   rotation: Rotation;
+  /**
+   * Optional per-coordinate TQ+ calibration the codes were encoded with (length dim
+   * each). When present the query is calibrated (q_calib = q_rot / scale) before the
+   * LUT and a per-query bias ⟨q_rot, shift⟩ is subtracted from each score; omitted
+   * means the un-calibrated path.
+   */
+  calibration?: Calibration;
 }
 
 /** Result of {@link searchFlat}: aligned indices and reported metric values, best-first. */
@@ -155,6 +163,11 @@ export function buildQueryLut(
  * per-vector array lengths, the centroid count, and the mask length — all real
  * boundaries a caller can hit, not dead guards.
  *
+ * An optional `computeScores` hook (the WASM kernel) fills the projections
+ * S[j] = ⟨q_calib, c_j⟩ for all j into a provided buffer; when omitted the scalar
+ * loop computes them inline (allocation-free). Either way the metric, per-query
+ * calibration bias, mask, and top-k are handled here, so the result is identical.
+ *
  * @throws {SearchError} on any failed precondition above.
  */
 export function searchFlat(
@@ -162,6 +175,7 @@ export function searchFlat(
   query: Float32Array,
   k: number,
   opts: SearchOptions,
+  computeScores?: (lut: Float32Array, out: Float64Array) => void,
 ): SearchResult {
   const { n, dim, bits, codes, scales, norms, centroids, rotation } = db;
   const levels = 1 << bits;
@@ -209,9 +223,24 @@ export function searchFlat(
   const norms2: QueryNorms = { qNorm, qNormSq };
 
   // ── Rotate the query once, then build the shared LUT ─────────────────────
+  // With TQ+ calibration the codes hold calibrated coordinates, so we score against
+  // q_calib = q_rot / scale and subtract the per-query bias ⟨q_rot, shift⟩ from every
+  // candidate (the exact dual of the de-calibrated reconstruction used in ./encode).
   const qRot = new Float32Array(dim);
   rotation.apply(query, qRot);
-  const lut = buildQueryLut(qRot, centroids, dim, levels);
+  const { calibration } = db;
+  let lutQuery = qRot;
+  let biasQ = 0;
+  if (calibration !== undefined) {
+    const { shift, scale: scaleCal } = calibration;
+    const qCalib = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) {
+      qCalib[i] = qRot[i]! / scaleCal[i]!;
+      biasQ += qRot[i]! * shift[i]!;
+    }
+    lutQuery = qCalib;
+  }
+  const lut = buildQueryLut(lutQuery, centroids, dim, levels);
 
   const { metric } = opts;
   const top = new TopK(k);
@@ -222,13 +251,25 @@ export function searchFlat(
   // the squared distance −rankKey. We recover values from the kept keys after
   // selection (mapKeyToValue), so the scan stays a pure score-and-add with no
   // per-candidate allocation.
-  for (let j = 0; j < n; j++) {
-    if (mask !== undefined && !mask[j]) continue;
-    const base = j * dim;
-    let s = 0;
-    for (let i = 0; i < dim; i++) s += lut[i * levels + codes[base + i]!]!;
-    const { rankKey } = scoreMetric(metric, s, scales[j]!, norms[j]!, norms2);
-    top.add(rankKey, j);
+  if (computeScores !== undefined) {
+    // WASM path: the kernel fills every S[j] = ⟨q_calib, c_j⟩; we apply the
+    // calibration bias, metric, and mask here (the cheap O(n) part).
+    const scores = new Float64Array(n);
+    computeScores(lut, scores);
+    for (let j = 0; j < n; j++) {
+      if (mask !== undefined && !mask[j]) continue;
+      const { rankKey } = scoreMetric(metric, scores[j]! - biasQ, scales[j]!, norms[j]!, norms2);
+      top.add(rankKey, j);
+    }
+  } else {
+    for (let j = 0; j < n; j++) {
+      if (mask !== undefined && !mask[j]) continue;
+      const base = j * dim;
+      let s = 0;
+      for (let i = 0; i < dim; i++) s += lut[i * levels + codes[base + i]!]!;
+      const { rankKey } = scoreMetric(metric, s - biasQ, scales[j]!, norms[j]!, norms2);
+      top.add(rankKey, j);
+    }
   }
 
   const { indices, scores: keys } = top.result();
