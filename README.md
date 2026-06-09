@@ -9,7 +9,11 @@ A clean-room implementation of Google Research's [TurboQuant](https://arxiv.org/
 [RaBitQ](https://arxiv.org/abs/2405.12497) (Gao & Long, SIGMOD 2024) unbiased-estimator correction.
 Runs anywhere JavaScript runs — Node, browsers, Bun, Cloudflare Workers, React Native.
 
-[![npm](https://img.shields.io/npm/v/quantvec.svg)](https://www.npmjs.com/package/quantvec)
+<a href="https://npmjs.com/package/quantvec">
+  <img src="https://img.shields.io/npm/v/quantvec.svg"></img>
+  <img src="https://img.shields.io/npm/dt/quantvec.svg"></img>
+</a>
+
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 **Add vectors, search instantly — no training, no native build, no server.**  
