@@ -26,10 +26,6 @@ export function defaultNprobe(nlist: number): number {
   return Math.max(1, Math.ceil(nlist / 8));
 }
 
-/** Domain separator XORed into the index seed so the k-means RNG stream never
- *  aliases the rotation's stream derived from the same seed ("IVF1" in ASCII). */
-const IVF_SEED_DOMAIN = 0x49564631n;
-
 /**
  * The trained cell structure: centroids plus posting-list bookkeeping.
  *
@@ -93,7 +89,11 @@ export class CoarseQuantizer {
     dim: number,
     seed: number,
   ): CoarseQuantizer {
-    const rng = createRng((BigInt(Math.trunc(seed)) & ((1n << 64n) - 1n)) ^ IVF_SEED_DOMAIN);
+    // Domain-separate the k-means RNG stream from the rotation's stream derived
+    // from the same seed: XOR in "IVF1" (ASCII). createRng masks bigint seeds to
+    // 64 bits itself, and the separator fits in the mask, so XOR-then-mask here
+    // equals mask-then-XOR — no explicit masking needed.
+    const rng = createRng(BigInt(Math.trunc(seed)) ^ 0x49564631n);
     const m = vecs.length;
     const sampleSize = Math.min(m, IVF_TRAIN_SAMPLE_PER_LIST * nlist);
 
