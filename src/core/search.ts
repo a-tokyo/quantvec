@@ -171,6 +171,34 @@ export function buildQueryLut(
  *
  * @throws {SearchError} on any failed precondition above.
  */
+/**
+ * Validate a query vector against `dim` — length, per-element finiteness, and a
+ * non-zero norm — throwing the same typed errors for the same bad inputs on every
+ * search path. Used by {@link searchFlat}/{@link searchSlots} (via the shared scan
+ * preamble) and by the index's IVF branch *before* centroid probing, so a malformed
+ * query never reaches the probe arithmetic. Returns the query norms.
+ *
+ * @throws {SearchError} `'INVALID_LENGTH'` on a wrong-length or non-finite query;
+ *   `'ZERO_QUERY'` on a zero query (no direction).
+ */
+export function validateQuery(query: Float32Array, dim: number): QueryNorms {
+  if (query.length !== dim) {
+    throw new SearchError('INVALID_LENGTH', `query length ${query.length} != dim ${dim}`);
+  }
+  let qNormSq = 0;
+  for (let i = 0; i < dim; i++) {
+    const x = query[i]!;
+    if (!Number.isFinite(x)) {
+      throw new SearchError('INVALID_LENGTH', `query[${i}] must be finite, got ${x}`);
+    }
+    qNormSq += x * x;
+  }
+  if (qNormSq === 0) {
+    throw new SearchError('ZERO_QUERY', 'cannot search with a zero query (no direction)');
+  }
+  return { qNorm: Math.sqrt(qNormSq), qNormSq };
+}
+
 /** Per-query state shared by {@link searchFlat} and {@link searchSlots}. */
 interface PreparedScan {
   /** The per-query nibble LUT (dim·levels). */
@@ -207,9 +235,7 @@ function prepareScan(
   if (rotation.dim !== dim) {
     throw new SearchError('MISMATCH', `rotation.dim ${rotation.dim} != dim ${dim}`);
   }
-  if (query.length !== dim) {
-    throw new SearchError('INVALID_LENGTH', `query length ${query.length} != dim ${dim}`);
-  }
+  const norms2 = validateQuery(query, dim);
   if (codes.length !== n * dim) {
     throw new SearchError('MISMATCH', `codes length ${codes.length} != n·dim ${n * dim}`);
   }
@@ -226,21 +252,6 @@ function prepareScan(
   if (mask !== undefined && mask.length !== n) {
     throw new SearchError('INVALID_MASK', `mask length ${mask.length} != n ${n}`);
   }
-
-  // ── Query norms (also rejects a non-finite / zero query) ─────────────────
-  let qNormSq = 0;
-  for (let i = 0; i < dim; i++) {
-    const x = query[i]!;
-    if (!Number.isFinite(x)) {
-      throw new SearchError('INVALID_LENGTH', `query[${i}] must be finite, got ${x}`);
-    }
-    qNormSq += x * x;
-  }
-  if (qNormSq === 0) {
-    throw new SearchError('ZERO_QUERY', 'cannot search with a zero query (no direction)');
-  }
-  const qNorm = Math.sqrt(qNormSq);
-  const norms2: QueryNorms = { qNorm, qNormSq };
 
   // ── Rotate the query once, then build the shared LUT ─────────────────────
   // With TQ+ calibration the codes hold calibrated coordinates, so we score against

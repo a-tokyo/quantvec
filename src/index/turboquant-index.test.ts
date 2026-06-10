@@ -757,3 +757,94 @@ describe('TurboQuantIndex — IVF coarse quantizer', () => {
     expect((err as IndexError).code).toBe('INVALID_NPROBE');
   });
 });
+
+describe('TurboQuantIndex — IVF input hardening (review follow-ups)', () => {
+  const IDIM = 32;
+
+  function clusteredVecs(clusters: number, per: number, seed: number): Float32Array[] {
+    const rng = createRng(seed);
+    const centers = Array.from({ length: clusters }, () => {
+      const c = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) c[i] = rng.nextGaussian() * 10;
+      return c;
+    });
+    const out: Float32Array[] = [];
+    for (let b = 0; b < clusters; b++) {
+      for (let j = 0; j < per; j++) {
+        const v = new Float32Array(IDIM);
+        for (let i = 0; i < IDIM; i++) v[i] = centers[b]![i]! + rng.nextGaussian();
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  it('rejects malformed queries with the same typed errors as the flat path, before probing', () => {
+    const data = clusteredVecs(4, 10, 14);
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    ivf.add(data);
+    flat.add(data);
+    const bads: [Float32Array, string][] = [
+      [new Float32Array(IDIM - 1), 'INVALID_LENGTH'], // wrong length
+      [new Float32Array(IDIM).fill(Number.NaN), 'INVALID_LENGTH'], // non-finite
+      [new Float32Array(IDIM), 'ZERO_QUERY'], // zero query
+    ];
+    for (const [bad, code] of bads) {
+      for (const idx of [ivf, flat]) {
+        let err: unknown;
+        try {
+          idx.search(bad, 2);
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(SearchError);
+        expect((err as SearchError).code).toBe(code);
+      }
+    }
+  });
+
+  it('validates the first training batch atomically: a bad row leaves the index unchanged', () => {
+    const good = clusteredVecs(4, 10, 15);
+    const nanRow = new Float32Array(IDIM).fill(1);
+    nanRow[3] = Number.NaN;
+    for (const poison of [nanRow, new Float32Array(IDIM) /* zero row */]) {
+      const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+      let err: unknown;
+      try {
+        ivf.add([...good.slice(0, 10), poison, ...good.slice(10)]);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(EncodeError);
+      expect(ivf.size).toBe(0); // nothing appended
+      expect(ivf.ivfActive).toBe(false); // nothing trained on the poisoned batch
+      ivf.add(good); // the decision is NOT frozen by the failed batch
+      expect(ivf.ivfActive).toBe(true);
+      expect(ivf.size).toBe(good.length);
+    }
+  });
+
+  it('validates the first calibration batch the same way', () => {
+    const rng = createRng(16);
+    const good = Array.from({ length: CALIBRATION_MIN_SAMPLES }, () => {
+      const v = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) v[i] = rng.nextGaussian();
+      return v;
+    });
+    const idx = new TurboQuantIndex({ dim: IDIM, calibrate: true, wasm: false });
+    const poisoned = [...good];
+    poisoned[7] = new Float32Array(IDIM); // zero row
+    let err: unknown;
+    try {
+      idx.add(poisoned);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(EncodeError);
+    expect(idx.size).toBe(0);
+    expect(idx.calibrated).toBe(false);
+    idx.add(good); // decision not frozen; a clean batch still calibrates
+    expect(idx.calibrated).toBe(true);
+  });
+});

@@ -22,13 +22,13 @@ import { fitCalibration } from '../core/calibrate';
 import type { Calibration } from '../core/calibrate';
 import { getCodebook } from '../core/codebook';
 import type { Bits, Codebook } from '../core/codebook';
-import { createEncodeScratch, encodeVector } from '../core/encode';
+import { createEncodeScratch, encodeVector, validateVectorBatch } from '../core/encode';
 import type { EncodeOptions, EncodeScratch } from '../core/encode';
 import { scoreMetric } from '../core/metrics';
 import type { Distance, QueryNorms } from '../core/metrics';
 import { createRotation } from '../core/rotation';
 import type { Rotation } from '../core/rotation';
-import { buildQueryLut, searchFlat, searchSlots, SearchError } from '../core/search';
+import { buildQueryLut, searchFlat, searchSlots, validateQuery, SearchError } from '../core/search';
 import { CoarseQuantizer, defaultNprobe } from './coarse';
 import type { EncodedDb, SearchOptions, SearchResult } from '../core/search';
 import { TopK } from '../core/topk';
@@ -469,10 +469,22 @@ export class TurboQuantIndex {
    * @throws {EncodeError} (re-thrown) on a non-finite or zero vector, or
    *   (`'DEGENERATE'`, calibrated indexes only) a vector so far outside the calibrated
    *   distribution that it cannot be encoded faithfully. Note: a batch is appended in
-   *   order, so an encode error mid-batch leaves the preceding vectors added.
+   *   order, so an encode error mid-batch leaves the preceding vectors added — except
+   *   the first batch of a `calibrate`/`ivf` index, which is validated atomically up
+   *   front (a bad row would otherwise poison the frozen calibration/centroids before
+   *   encode could reject it), so it leaves the index completely unchanged.
    */
   add(vectors: Float32Array | number[][] | Float32Array[]): void {
     const vecs = this.#toVectorArray(vectors);
+    // A pending training decision must only ever see a valid batch: a non-finite or
+    // zero row would poison the calibration fit / k-means centroids that are about to
+    // be frozen. Validate atomically before fitting (IdMapIndex/Collection already do).
+    const trainingPending =
+      this.#n === 0 &&
+      vecs.length > 0 &&
+      ((this.#calibrate && !this.#calibrationFrozen) ||
+        (this.#ivfOpts !== undefined && !this.#ivfFrozen));
+    if (trainingPending) validateVectorBatch(vecs);
     this.fitCalibrationFromBatch(vecs); // first eligible batch fits + freezes TQ+
     this.trainIvfFromBatch(vecs); // first eligible batch trains + freezes IVF
     this.#ensureCapacity(this.#n + vecs.length);
@@ -556,6 +568,10 @@ export class TurboQuantIndex {
     if (this.#coarse !== undefined) {
       const nprobe = opts.nprobe ?? this.#coarse.defaultNprobe;
       validateNprobe(nprobe, this.#coarse.nlist);
+      // Same typed errors as the flat path, checked BEFORE the centroid probe so a
+      // malformed query (wrong length / non-finite / zero) never reaches the probe
+      // arithmetic. searchSlots re-validates via the shared preamble — cheap (O(dim)).
+      validateQuery(query, this.#dim);
       const slots = this.#coarse.probe(query, nprobe);
       return searchSlots(this.#db(), query, k, slots, searchOpts);
     }
