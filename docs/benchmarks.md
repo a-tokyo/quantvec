@@ -30,28 +30,28 @@ uses the O(d·log d) FWHT.
 
 ## dbpedia-OpenAI-100k (real text embeddings, 1536-d)
 
-`npm run bench:openai` — 5k of 100k × 1536-d OpenAI text-embedding-ada-002 vectors, 100 queries,
-brute-force cosine ground truth within the sub-sample. dim=1536 is a power of two → FWHT rotation +
-WASM kernel active:
+`npm run bench:openai` — full 100k × 1536-d OpenAI text-embedding-ada-002 vectors, 973 queries,
+ann-benchmarks pre-computed cosine ground truth (full corpus). dim=1536 is a power of two → FWHT
+rotation + WASM kernel active:
 
-| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
-| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
-| 2    | 0.800    | 0.843     | 0.847      | ~481           | ~104 | —            | 15.67×      |
-| 3    | 0.880    | 0.895     | 0.916      | ~480           | ~106 | —            | 10.52×      |
-| 4    | 0.980    | 0.943     | 0.956      | ~477           | ~106 | **~144**     | 7.92×       |
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | --- | ------------ | ----------- |
+| 2    | 0.791    | 0.824     | 0.840      | ~461           | ~7  | —            | 15.67×      |
+| 3    | 0.891    | 0.899     | 0.912      | ~462           | ~7  | —            | 10.52×      |
+| 4    | 0.953    | 0.944     | 0.952      | ~238           | ~7  | **~65**      | 7.92×       |
 
-High dimensionality and the power-of-two FWHT path push recall well above the GloVe-200 and
-SIFT-small results, consistent with the TurboQuant paper's reported numbers on real OpenAI
-embeddings.
+High dimensionality and the power-of-two FWHT path deliver strong recall. FastScan speedup is ~9×
+at 100k vectors (vs ~1.4× at 5k — the gain grows with n, consistent with the O(n) scan cost).
 
 ## FastScan speedup
 
 FastScan (`fastscan: true`, 4-bit only) speedup scales with corpus size:
 
-| corpus   | exact WASM | v128 FastScan | speedup  |
-| -------- | ---------- | ------------- | -------- |
-| 10k vecs | ~1152 QPS  | ~2055 QPS     | **1.8×** |
-| 50k vecs | ~240 QPS   | ~1350 QPS     | **5.7×** |
+| corpus    | exact WASM | v128 FastScan | speedup   |
+| --------- | ---------- | ------------- | --------- |
+| 10k vecs  | ~1152 QPS  | ~2055 QPS     | **1.8×**  |
+| 50k vecs  | ~240 QPS   | ~1350 QPS     | **5.7×**  |
+| 100k vecs | ~7 QPS     | ~65 QPS       | **~9.3×** |
 
 The SIMD scan cost is O(n) while the rescore-pool overhead is constant, so the gain grows with n.
 
@@ -90,18 +90,32 @@ The SIMD scan cost is O(n) while the rescore-pool overhead is constant, so the g
 
 ## IVF coarse quantizer (synthetic, clustered)
 
-`npm run bench:ivf` — 20k × 768-d Gaussian-mixture corpus (64 clusters), cosine, 4-bit, `nlist=128`,
-sweeping `nprobe` against the flat scalar baseline (env knobs: `DIM`, `N`, `NQ`, `CLUSTERS`, `NLIST`):
+`npm run bench:ivf` — Gaussian-mixture corpus, cosine, 4-bit, sweeping `nprobe` against the flat
+scalar baseline (env knobs: `DIM`, `N`, `NQ`, `CLUSTERS`, `NLIST`). Recall is measured against
+exact float32 ground truth, so the flat row is the 4-bit quantizer's own recall ceiling.
+`nprobe = nlist` reproduces the flat scan exactly (the `searchSlots` oracle).
+
+**20k vectors** (default: `nlist=128`, 64 clusters):
 
 | config  | recall@10 | QPS  | speedup vs flat |
 | ------- | --------- | ---- | --------------- |
 | flat    | 0.603     | 53   | 1.0×            |
 | ivf@1   | 0.387     | 1205 | 22.8×           |
 | ivf@4   | 0.602     | 852  | 16.1×           |
-| ivf@8   | 0.603     | 600  | 11.4×           |
+| ivf@8   | 0.603     | 600  | **11.4×**       |
 | ivf@128 | 0.603     | 60   | 1.1×            |
 
-Recall is measured against the exact **float32** ground truth, so the 0.603 ceiling is the 4-bit
-quantizer's own recall (the flat row) — IVF reaches that ceiling while probing 6% of the cells
-(`nprobe=8`), and `nprobe = nlist` reproduces the flat scan exactly (the `searchSlots` oracle). The
-speedup grows with corpus size: the probed-cell scan is O(n·nprobe/nlist) while flat is O(n).
+**200k vectors** (`N=200000 NQ=100 CLUSTERS=256 NLIST=1024`):
+
+| config   | recall@10 | QPS | speedup vs flat |
+| -------- | --------- | --- | --------------- |
+| flat     | 0.514     | 5   | 1.0×            |
+| ivf@1    | 0.202     | 577 | 111.6×          |
+| ivf@4    | 0.461     | 457 | 88.4×           |
+| ivf@8    | 0.512     | 335 | **64.8×**       |
+| ivf@16   | 0.513     | 233 | 45.0×           |
+| ivf@1024 | 0.514     | 5   | 1.0×            |
+
+The speedup grows with corpus size: at nprobe=8, probing 8/1024 cells (0.78%) gives **64.8×** on
+200k vectors vs **11.4×** on 20k (the O(n·nprobe/nlist) vs O(n) scaling). Recall ceiling is lower
+on 200k because the quantizer's 4-bit approximation is harder on a larger, denser corpus.

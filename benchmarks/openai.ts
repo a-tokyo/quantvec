@@ -80,14 +80,15 @@ async function main(): Promise<void> {
   if (nBase >= totalTrain) {
     const [, gtK] = neighborsDs.shape as [number, number];
     const k = Math.min(100, gtK);
+    // ann-benchmarks HDF5 files store neighbor indices as int64 (BigInt64Array).
     const neighborRaw = neighborsDs.slice([
       [0, nQuery],
       [0, k],
-    ]) as Int32Array;
+    ]) as unknown as BigInt64Array;
     groundtruth = [];
     for (let i = 0; i < nQuery; i++) {
       const row: number[] = [];
-      for (let j = 0; j < k; j++) row.push(neighborRaw[i * k + j]!);
+      for (let j = 0; j < k; j++) row.push(Number(neighborRaw[i * k + j]!));
       groundtruth.push(row);
     }
     process.stdout.write(`(using pre-computed ann-benchmarks ground truth — full corpus)\n\n`);
