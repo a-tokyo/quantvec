@@ -848,3 +848,40 @@ describe('TurboQuantIndex — IVF input hardening (review follow-ups)', () => {
     expect(idx.calibrated).toBe(true);
   });
 });
+
+describe('TurboQuantIndex — IVF oracle with tied scores', () => {
+  const IDIM = 32;
+
+  it('nprobe = nlist matches the flat scan exactly even with duplicate vectors (boundary ties)', () => {
+    const rng = createRng(77);
+    // 4 tight clusters; every vector duplicated 3× → exact rankKey ties everywhere,
+    // including at the k boundary. The top-k heap keeps tied candidates by visit
+    // order, so the oracle is unconditional only because nprobe = nlist routes to
+    // the canonical flat scan — this guards that routing against regression.
+    const base: Float32Array[] = [];
+    for (let b = 0; b < 4; b++) {
+      const center = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) center[i] = rng.nextGaussian() * 10;
+      for (let j = 0; j < 10; j++) {
+        const v = new Float32Array(IDIM);
+        for (let i = 0; i < IDIM; i++) v[i] = center[i]! + rng.nextGaussian();
+        base.push(v);
+      }
+    }
+    const data: Float32Array[] = [];
+    for (const v of base) data.push(v, Float32Array.from(v), Float32Array.from(v));
+
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    flat.add(data);
+    ivf.add(data);
+    for (const q of base.slice(0, 8)) {
+      for (const k of [2, 4, 7]) {
+        const a = flat.search(q, k);
+        const b = ivf.search(q, k, { nprobe: 4 });
+        expect(Array.from(b.indices)).toEqual(Array.from(a.indices));
+        expect(Array.from(b.scores)).toEqual(Array.from(a.scores));
+      }
+    }
+  });
+});

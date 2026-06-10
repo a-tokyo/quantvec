@@ -572,6 +572,13 @@ export class TurboQuantIndex {
       // malformed query (wrong length / non-finite / zero) never reaches the probe
       // arithmetic. searchSlots re-validates via the shared preamble — cheap (O(dim)).
       validateQuery(query, this.#dim);
+      // nprobe = nlist must reproduce the flat scan EXACTLY (the IVF oracle). The
+      // probed scan visits slots in posting-list order, and the top-k heap drops
+      // boundary ties, so with duplicate vectors the kept set is order-dependent —
+      // scan in canonical slot order instead (also skips a pointless full probe).
+      if (nprobe === this.#coarse.nlist) {
+        return searchFlat(this.#db(), query, k, searchOpts);
+      }
       const slots = this.#coarse.probe(query, nprobe);
       return searchSlots(this.#db(), query, k, slots, searchOpts);
     }

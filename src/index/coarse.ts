@@ -11,7 +11,10 @@
 // Affinity is metric-consistent with the index: cosine/dot rank cells by
 // argmax ⟨v, c⟩ over unit centroids (spherical k-means); euclidean ranks by
 // argmin ‖v − c‖². The quantized scan over the probed slots is ./../core/search
-// `searchSlots`, so IVF results at nprobe = nlist are EXACTLY the flat scan's.
+// `searchSlots` — the same exact kernel as the flat scan, visited in posting-list
+// order. At nprobe = nlist the index routes to the flat scan itself (canonical
+// slot order), so that oracle case is EXACTLY the flat scan's result even when
+// duplicate vectors tie at the k boundary.
 
 import { kmeans, nearestCentroid } from '../core/kmeans';
 import type { Distance } from '../core/metrics';
