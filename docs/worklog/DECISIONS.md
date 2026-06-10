@@ -2,6 +2,25 @@
 
 Concise record of locked decisions and their rationale. Newest first.
 
+## D-016 · IVF as an option on TurboQuantIndex (not a class); format v2; train-on-first-batch
+
+The IVF coarse quantizer ships as `ivf: { nlist, nprobe? }` on `TurboQuantIndexOptions`, NOT a
+separate index class: `IdMapIndex` wraps `TurboQuantIndex` and `Collection` wraps `IdMapIndex`, so a
+constructor option gives all three layers full parity (config + per-query `nprobe` + remove + ser/de)
+with two passthrough lines each. State lives in `index/coarse.ts` (`CoarseQuantizer`: centroids +
+posting lists with slot→list/slot→pos arrays for O(1) swap-remove patching) over `core/kmeans.ts`
+(seeded k-means++/Lloyd; spherical for cosine/dot, L2 for euclidean; domain-separated RNG stream from
+the index seed). Training mirrors calibration: fit-and-freeze from the first non-empty batch when it
+has ≥ `nlist` vectors (the hard k-means floor — predictable from the user's own config; quality
+guidance ≥ ~32·nlist lives in docs), else frozen flat forever. The probed-cell scan is the exact
+scalar kernel (`searchSlots` in `core/search.ts`, sharing `prepareScan` validation with `searchFlat`)
+→ `nprobe = nlist` ≡ flat scan bit-for-bit (the IVF analog of the WASM≡scalar oracle); the
+whole-database WASM/FastScan kernels are bypassed while IVF is active (cell-resident kernel = future
+wave). Serialization: format `VERSION` 1 → 2 with an always-written ivf presence byte (mirror of the
+calibration byte) + `nlist/nprobe/centroids/listForSlot` (postings rebuilt on load); v2-only readers
+per D-010 — a v1 reader rejects v2 cleanly with `BAD_VERSION` instead of misparsing. Measured
+(20k × 768-d clustered, 4-bit): 11.4× QPS at the flat scan's recall (nprobe = nlist/16).
+
 ## D-015 · WASM kernel: exact f64 + resident codes, not approximate FastScan (first)
 
 The WASM acceleration (`assembly/index.ts` + `src/wasm/kernel.ts`) ships as an EXACT kernel: codes

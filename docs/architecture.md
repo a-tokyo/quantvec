@@ -63,7 +63,8 @@ a bounded min-heap. This pure-TypeScript scalar kernel is the **correctness orac
 | `core/rng`, `core/rotation`, `core/fwht`     | seeded RNG, rotation (Householder QR, or FWHT for power-of-two dims)                                                  |
 | `core/beta`, `core/codebook`                 | Beta pdf/cdf/quantile, Lloyd-Max codebooks per `(dim, bits)`                                                          |
 | `core/encode`, `core/pack`, `core/calibrate` | normalize→rotate→(TQ+)→quantize→scale; bit-pack; calibration fit                                                      |
-| `core/search`, `core/topk`, `core/metrics`   | nibble-LUT scan, bounded heap, distance math                                                                          |
+| `core/search`, `core/topk`, `core/metrics`   | nibble-LUT scan (flat + probed-slot subset), bounded heap, distance math                                              |
+| `core/kmeans`, `index/coarse`                | seeded k-means++ / Lloyd; IVF cell structure (centroids + posting lists in lockstep with swap-remove)                 |
 | `wasm/kernel` + `assembly/`                  | WASM kernels: exact f64 scoreInto (bit-identical to scalar oracle) + v128 FastScan (blocked-nibble swizzle + rescore) |
 | `ergonomic/collection`, `ergonomic/filter`   | `createCollection`, `Collection<P>`, `must`/`should`/`must_not` filter DSL                                            |
 | `index/turboquant-index`                     | growable positional flat index                                                                                        |
@@ -72,5 +73,8 @@ a bounded min-heap. This pure-TypeScript scalar kernel is the **correctness orac
 
 ## Scope
 
-quantvec is a **flat** quantized index — search is an O(n) scan, excellent to ~1–10M vectors. It is
-not an HNSW graph; an IVF/coarse-quantizer layer for larger corpora is on the [roadmap](roadmap.md).
+quantvec is a **flat** quantized index — search is an O(n) scan, excellent to ~1–10M vectors — with
+an opt-in **IVF coarse quantizer** (`ivf: { nlist }`): k-means cells trained from the first batch,
+queries probe only the `nprobe` nearest cells (sublinear scan; the whole-database WASM kernels are
+bypassed while IVF is active — a cell-resident kernel is a future wave). It is not an HNSW graph
+([roadmap](roadmap.md) non-goal).

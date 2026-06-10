@@ -47,7 +47,8 @@ export class SearchError extends Error {
     | 'INVALID_LENGTH'
     | 'MISMATCH'
     | 'ZERO_QUERY'
-    | 'INVALID_MASK';
+    | 'INVALID_MASK'
+    | 'INVALID_SLOT';
   constructor(code: SearchError['code'], message: string) {
     super(message);
     this.name = 'SearchError';
@@ -170,13 +171,60 @@ export function buildQueryLut(
  *
  * @throws {SearchError} on any failed precondition above.
  */
-export function searchFlat(
+/**
+ * Validate a query vector against `dim` — length, per-element finiteness, and a
+ * non-zero norm — throwing the same typed errors for the same bad inputs on every
+ * search path. Used by {@link searchFlat}/{@link searchSlots} (via the shared scan
+ * preamble) and by the index's IVF branch *before* centroid probing, so a malformed
+ * query never reaches the probe arithmetic. Returns the query norms.
+ *
+ * @throws {SearchError} `'INVALID_LENGTH'` on a wrong-length or non-finite query;
+ *   `'ZERO_QUERY'` on a zero query (no direction).
+ */
+export function validateQuery(query: Float32Array, dim: number): QueryNorms {
+  if (query.length !== dim) {
+    throw new SearchError('INVALID_LENGTH', `query length ${query.length} != dim ${dim}`);
+  }
+  let qNormSq = 0;
+  for (let i = 0; i < dim; i++) {
+    const x = query[i]!;
+    if (!Number.isFinite(x)) {
+      throw new SearchError('INVALID_LENGTH', `query[${i}] must be finite, got ${x}`);
+    }
+    qNormSq += x * x;
+  }
+  if (qNormSq === 0) {
+    throw new SearchError('ZERO_QUERY', 'cannot search with a zero query (no direction)');
+  }
+  return { qNorm: Math.sqrt(qNormSq), qNormSq };
+}
+
+/** Per-query state shared by {@link searchFlat} and {@link searchSlots}. */
+interface PreparedScan {
+  /** The per-query nibble LUT (dim·levels). */
+  lut: Float32Array;
+  /** Per-query calibration bias ⟨q_rot, shift⟩ (0 when un-calibrated). */
+  biasQ: number;
+  /** Query norms for ./metrics. */
+  norms2: QueryNorms;
+  /** 2^bits. */
+  levels: number;
+}
+
+/**
+ * Shared scan preamble: validate every boundary (k, shapes, mask length, query
+ * finiteness/zero), rotate the query once, apply the calibration dual, and build
+ * the per-query LUT. Both scan entry points run identical validation, so they
+ * throw identical typed errors for identical bad inputs.
+ *
+ * @throws {SearchError} on any failed precondition (see {@link searchFlat}).
+ */
+function prepareScan(
   db: EncodedDb,
   query: Float32Array,
   k: number,
   opts: SearchOptions,
-  computeScores?: (lut: Float32Array, out: Float64Array) => void,
-): SearchResult {
+): PreparedScan {
   const { n, dim, bits, codes, scales, norms, centroids, rotation } = db;
   const levels = 1 << bits;
 
@@ -187,9 +235,7 @@ export function searchFlat(
   if (rotation.dim !== dim) {
     throw new SearchError('MISMATCH', `rotation.dim ${rotation.dim} != dim ${dim}`);
   }
-  if (query.length !== dim) {
-    throw new SearchError('INVALID_LENGTH', `query length ${query.length} != dim ${dim}`);
-  }
+  const norms2 = validateQuery(query, dim);
   if (codes.length !== n * dim) {
     throw new SearchError('MISMATCH', `codes length ${codes.length} != n·dim ${n * dim}`);
   }
@@ -206,21 +252,6 @@ export function searchFlat(
   if (mask !== undefined && mask.length !== n) {
     throw new SearchError('INVALID_MASK', `mask length ${mask.length} != n ${n}`);
   }
-
-  // ── Query norms (also rejects a non-finite / zero query) ─────────────────
-  let qNormSq = 0;
-  for (let i = 0; i < dim; i++) {
-    const x = query[i]!;
-    if (!Number.isFinite(x)) {
-      throw new SearchError('INVALID_LENGTH', `query[${i}] must be finite, got ${x}`);
-    }
-    qNormSq += x * x;
-  }
-  if (qNormSq === 0) {
-    throw new SearchError('ZERO_QUERY', 'cannot search with a zero query (no direction)');
-  }
-  const qNorm = Math.sqrt(qNormSq);
-  const norms2: QueryNorms = { qNorm, qNormSq };
 
   // ── Rotate the query once, then build the shared LUT ─────────────────────
   // With TQ+ calibration the codes hold calibrated coordinates, so we score against
@@ -242,7 +273,19 @@ export function searchFlat(
   }
   const lut = buildQueryLut(lutQuery, centroids, dim, levels);
 
-  const { metric } = opts;
+  return { lut, biasQ, norms2, levels };
+}
+
+export function searchFlat(
+  db: EncodedDb,
+  query: Float32Array,
+  k: number,
+  opts: SearchOptions,
+  computeScores?: (lut: Float32Array, out: Float64Array) => void,
+): SearchResult {
+  const { n, dim, codes, scales, norms } = db;
+  const { lut, biasQ, norms2, levels } = prepareScan(db, query, k, opts);
+  const { mask, metric } = opts;
   const top = new TopK(k);
 
   // ── The flat scan ────────────────────────────────────────────────────────
@@ -270,6 +313,52 @@ export function searchFlat(
       const { rankKey } = scoreMetric(metric, s - biasQ, scales[j]!, norms[j]!, norms2);
       top.add(rankKey, j);
     }
+  }
+
+  const { indices, scores: keys } = top.result();
+  const scores = new Float32Array(indices.length);
+  for (let i = 0; i < indices.length; i++) scores[i] = mapKeyToValue(metric, keys[i]!);
+  return { indices, scores };
+}
+
+/**
+ * Subset scan: score ONLY the given `slots` (database row indices) — the IVF
+ * probed-posting-list scan. Identical query preparation, validation, and error
+ * semantics as {@link searchFlat} (same typed errors for the same bad inputs),
+ * plus `'INVALID_SLOT'` for a slot outside [0, n). `opts.mask`, when given, is
+ * the full n-length allowlist indexed by slot — a probed slot the mask excludes
+ * is skipped, exactly like the flat scan.
+ *
+ * Returns up to k best, best-first; fewer (possibly zero) when the slots/mask
+ * yield fewer candidates. A slot listed twice would be scored twice (the heap
+ * would then hold duplicates) — callers pass disjoint posting lists, and the
+ * IVF bookkeeping guarantees disjointness, so this is not guarded.
+ *
+ * @throws {SearchError} on any failed precondition above.
+ */
+export function searchSlots(
+  db: EncodedDb,
+  query: Float32Array,
+  k: number,
+  slots: Int32Array,
+  opts: SearchOptions,
+): SearchResult {
+  const { n, dim, codes, scales, norms } = db;
+  const { lut, biasQ, norms2, levels } = prepareScan(db, query, k, opts);
+  const { mask, metric } = opts;
+
+  const top = new TopK(k);
+  for (let t = 0; t < slots.length; t++) {
+    const j = slots[t]!;
+    if (!Number.isInteger(j) || j < 0 || j >= n) {
+      throw new SearchError('INVALID_SLOT', `slot ${j} out of range [0, ${n})`);
+    }
+    if (mask !== undefined && !mask[j]) continue;
+    const base = j * dim;
+    let s = 0;
+    for (let i = 0; i < dim; i++) s += lut[i * levels + codes[base + i]!]!;
+    const { rankKey } = scoreMetric(metric, s - biasQ, scales[j]!, norms[j]!, norms2);
+    top.add(rankKey, j);
   }
 
   const { indices, scores: keys } = top.result();

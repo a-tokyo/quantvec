@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQueryLut, searchFlat, SearchError } from './search';
+import { buildQueryLut, searchFlat, searchSlots, SearchError } from './search';
 import type { EncodedDb } from './search';
 import { getCodebook } from './codebook';
 import type { Bits } from './codebook';
@@ -450,5 +450,78 @@ describe('searchFlat — TQ+ calibration', () => {
     const res = searchFlat({ ...db, calibration: cal }, query, 5, { metric: 'dot' });
     expect(res.indices.length).toBe(5);
     expect(res.scores.every((s) => Number.isFinite(s))).toBe(true);
+  });
+});
+
+// ── searchSlots: the IVF probed-list subset scan ────────────────────────────────
+
+describe('searchSlots', () => {
+  const dim = 64;
+  const n = 50;
+  const rng = createRng(135);
+  const vectors = randomVectors(n, dim, rng);
+  const db = buildDb(vectors, dim, 4);
+  const allSlots = Int32Array.from({ length: n }, (_, j) => j);
+
+  it('over all slots equals searchFlat exactly (indices and scores)', () => {
+    for (const metric of ['dot', 'cosine', 'euclidean'] as const) {
+      const flat = searchFlat(db, vectors[2]!, 10, { metric });
+      const sub = searchSlots(db, vectors[2]!, 10, allSlots, { metric });
+      expect(Array.from(sub.indices)).toEqual(Array.from(flat.indices));
+      expect(Array.from(sub.scores)).toEqual(Array.from(flat.scores));
+    }
+  });
+
+  it('only returns members of the given subset', () => {
+    const subset = Int32Array.from([1, 5, 9, 13, 17, 21]);
+    const res = searchSlots(db, vectors[0]!, 4, subset, { metric: 'cosine' });
+    const allowed = new Set(Array.from(subset));
+    expect(res.indices.length).toBe(4);
+    for (const j of res.indices) expect(allowed.has(j)).toBe(true);
+  });
+
+  it('honors the full-length mask within the subset', () => {
+    const subset = Int32Array.from([0, 1, 2, 3]);
+    const mask = new Uint8Array(n).fill(1);
+    mask[1] = 0;
+    const res = searchSlots(db, vectors[1]!, 4, subset, { metric: 'dot', mask });
+    expect(Array.from(res.indices)).not.toContain(1);
+    expect(res.indices.length).toBe(3);
+  });
+
+  it('empty slots yields an empty result; k > candidates yields a short result', () => {
+    const empty = searchSlots(db, vectors[0]!, 5, new Int32Array(0), { metric: 'dot' });
+    expect(empty.indices.length).toBe(0);
+    const short = searchSlots(db, vectors[0]!, 5, Int32Array.from([3, 4]), { metric: 'dot' });
+    expect(short.indices.length).toBe(2);
+  });
+
+  it('rejects an out-of-range slot with INVALID_SLOT', () => {
+    for (const bad of [-1, n]) {
+      let err: unknown;
+      try {
+        searchSlots(db, vectors[0]!, 2, Int32Array.from([0, bad]), { metric: 'dot' });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(SearchError);
+      expect((err as SearchError).code).toBe('INVALID_SLOT');
+    }
+  });
+
+  it('shares searchFlat validation: bad mask length and zero query throw identically', () => {
+    let err: unknown;
+    try {
+      searchSlots(db, vectors[0]!, 2, allSlots, { metric: 'dot', mask: new Uint8Array(3) });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as SearchError).code).toBe('INVALID_MASK');
+    try {
+      searchSlots(db, new Float32Array(dim), 2, allSlots, { metric: 'dot' });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as SearchError).code).toBe('ZERO_QUERY');
   });
 });

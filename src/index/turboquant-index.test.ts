@@ -576,3 +576,312 @@ describe('TurboQuantIndex — FastScan path (v128 blocked-nibble + exact rescore
     expect(totalHits / (queries.length * k)).toBeGreaterThan(0.8);
   });
 });
+
+describe('TurboQuantIndex — IVF coarse quantizer', () => {
+  const IDIM = 32;
+
+  /** Gaussian mixture: `clusters` well-separated centers, `per` points each. */
+  function clusteredVecs(clusters: number, per: number, seed: number): Float32Array[] {
+    const rng = createRng(seed);
+    const centers = Array.from({ length: clusters }, () => {
+      const c = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) c[i] = rng.nextGaussian() * 10;
+      return c;
+    });
+    const out: Float32Array[] = [];
+    for (let b = 0; b < clusters; b++) {
+      for (let j = 0; j < per; j++) {
+        const v = new Float32Array(IDIM);
+        for (let i = 0; i < IDIM; i++) v[i] = centers[b]![i]! + rng.nextGaussian();
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  it('validates nlist and nprobe at construction', () => {
+    for (const nlist of [1, 1.5, 0, 1 << 23]) {
+      let err: unknown;
+      try {
+        new TurboQuantIndex({ dim: IDIM, ivf: { nlist } });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(IndexError);
+      expect((err as IndexError).code).toBe('INVALID_NLIST');
+    }
+    for (const nprobe of [0, 5, 2.5]) {
+      let err: unknown;
+      try {
+        new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4, nprobe } });
+      } catch (e) {
+        err = e;
+      }
+      expect((err as IndexError).code).toBe('INVALID_NPROBE');
+    }
+  });
+
+  it('trains on the first batch when it has ≥ nlist vectors, and freezes flat otherwise', () => {
+    const data = clusteredVecs(4, 10, 1);
+    const trained = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    trained.add(data);
+    expect(trained.ivfActive).toBe(true);
+
+    const flat = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 8 } });
+    flat.add(data.slice(0, 7)); // 7 < nlist = 8 → flat forever
+    expect(flat.ivfActive).toBe(false);
+    flat.add(data); // a later big add must NOT retrain (decision frozen)
+    expect(flat.ivfActive).toBe(false);
+  });
+
+  it('nprobe = nlist reproduces the flat scan exactly (indices and scores)', () => {
+    const data = clusteredVecs(8, 25, 2);
+    const queries = clusteredVecs(8, 1, 3);
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 8 } });
+    flat.add(data);
+    ivf.add(data);
+    expect(ivf.ivfActive).toBe(true);
+    for (const metric of ['dot', 'cosine', 'euclidean'] as const) {
+      for (const q of queries) {
+        const a = flat.search(q, 10, { metric });
+        const b = ivf.search(q, 10, { metric, nprobe: 8 });
+        expect(Array.from(b.indices)).toEqual(Array.from(a.indices));
+        expect(Array.from(b.scores)).toEqual(Array.from(a.scores));
+      }
+    }
+  });
+
+  it('achieves high recall at nprobe ≪ nlist on clustered data', () => {
+    const data = clusteredVecs(16, 30, 4);
+    const queries = clusteredVecs(16, 1, 5);
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 16, nprobe: 4 } });
+    flat.add(data);
+    ivf.add(data);
+    const k = 10;
+    let hits = 0;
+    for (const q of queries) {
+      const exact = new Set(Array.from(flat.search(q, k).indices));
+      for (const j of ivf.search(q, k).indices) if (exact.has(j)) hits++;
+    }
+    expect(hits / (queries.length * k)).toBeGreaterThan(0.8);
+  });
+
+  it('keeps remove parity with a flat twin (interleaved adds and removes)', () => {
+    const data = clusteredVecs(4, 30, 6);
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    flat.add(data.slice(0, 80));
+    ivf.add(data.slice(0, 80));
+    const rng = createRng(7);
+    let n = 80;
+    let next = 80;
+    for (let op = 0; op < 60; op++) {
+      if (rng.nextFloat() < 0.5 && next < data.length) {
+        flat.addOne(data[next]!);
+        ivf.addOne(data[next]!);
+        next++;
+        n++;
+      } else if (n > 1) {
+        const i = Math.min(n - 1, Math.floor(rng.nextFloat() * n));
+        flat.swapRemove(i);
+        ivf.swapRemove(i);
+        n--;
+      }
+    }
+    expect(ivf.size).toBe(flat.size);
+    const q = data[0]!;
+    const a = flat.search(q, 10);
+    const b = ivf.search(q, 10, { nprobe: 4 });
+    expect(Array.from(b.indices)).toEqual(Array.from(a.indices));
+    expect(Array.from(b.scores)).toEqual(Array.from(a.scores));
+  });
+
+  it('round-trips through toBytes/fromBytes with identical search results', () => {
+    const data = clusteredVecs(4, 20, 8);
+    const ivf = new TurboQuantIndex({
+      dim: IDIM,
+      metric: 'euclidean',
+      ivf: { nlist: 4, nprobe: 2 },
+    });
+    ivf.add(data);
+    const restored = TurboQuantIndex.fromBytes(ivf.toBytes());
+    expect(restored.ivfActive).toBe(true);
+    expect(restored.size).toBe(ivf.size);
+    for (const q of data.slice(0, 5)) {
+      const a = ivf.search(q, 5);
+      const b = restored.search(q, 5);
+      expect(Array.from(b.indices)).toEqual(Array.from(a.indices));
+      expect(Array.from(b.scores)).toEqual(Array.from(a.scores));
+    }
+    // The restored index accepts further adds and removes without retraining.
+    restored.addOne(data[0]!);
+    restored.swapRemove(0);
+    expect(restored.ivfActive).toBe(true);
+  });
+
+  it('honors masks within the probed cells, and clear() keeps the trained quantizer', () => {
+    const data = clusteredVecs(4, 20, 9);
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    ivf.add(data);
+    const mask = new Uint8Array(80).fill(1);
+    mask[3] = 0;
+    const res = ivf.search(data[3]!, 1, { mask, nprobe: 4 });
+    expect(res.indices[0]).not.toBe(3);
+
+    ivf.clear();
+    expect(ivf.size).toBe(0);
+    expect(ivf.ivfActive).toBe(true); // centroids survive; decision stays frozen
+    ivf.add(data.slice(0, 10)); // post-clear adds assign to the existing cells
+    expect(ivf.search(data[0]!, 1, { nprobe: 4 }).indices.length).toBe(1);
+  });
+
+  it('ignores nprobe when IVF is not active; validates it per query when active', () => {
+    const flat = new TurboQuantIndex({ dim: IDIM });
+    flat.add(clusteredVecs(2, 5, 10));
+    expect(() =>
+      flat.search(flat.size > 0 ? clusteredVecs(1, 1, 11)[0]! : new Float32Array(IDIM), 2, {
+        nprobe: 999,
+      }),
+    ).not.toThrow();
+
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    ivf.add(clusteredVecs(4, 10, 12));
+    let err: unknown;
+    try {
+      ivf.search(clusteredVecs(1, 1, 13)[0]!, 2, { nprobe: 5 });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as IndexError).code).toBe('INVALID_NPROBE');
+  });
+});
+
+describe('TurboQuantIndex — IVF input hardening (review follow-ups)', () => {
+  const IDIM = 32;
+
+  function clusteredVecs(clusters: number, per: number, seed: number): Float32Array[] {
+    const rng = createRng(seed);
+    const centers = Array.from({ length: clusters }, () => {
+      const c = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) c[i] = rng.nextGaussian() * 10;
+      return c;
+    });
+    const out: Float32Array[] = [];
+    for (let b = 0; b < clusters; b++) {
+      for (let j = 0; j < per; j++) {
+        const v = new Float32Array(IDIM);
+        for (let i = 0; i < IDIM; i++) v[i] = centers[b]![i]! + rng.nextGaussian();
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  it('rejects malformed queries with the same typed errors as the flat path, before probing', () => {
+    const data = clusteredVecs(4, 10, 14);
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    ivf.add(data);
+    flat.add(data);
+    const bads: [Float32Array, string][] = [
+      [new Float32Array(IDIM - 1), 'INVALID_LENGTH'], // wrong length
+      [new Float32Array(IDIM).fill(Number.NaN), 'INVALID_LENGTH'], // non-finite
+      [new Float32Array(IDIM), 'ZERO_QUERY'], // zero query
+    ];
+    for (const [bad, code] of bads) {
+      for (const idx of [ivf, flat]) {
+        let err: unknown;
+        try {
+          idx.search(bad, 2);
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(SearchError);
+        expect((err as SearchError).code).toBe(code);
+      }
+    }
+  });
+
+  it('validates the first training batch atomically: a bad row leaves the index unchanged', () => {
+    const good = clusteredVecs(4, 10, 15);
+    const nanRow = new Float32Array(IDIM).fill(1);
+    nanRow[3] = Number.NaN;
+    for (const poison of [nanRow, new Float32Array(IDIM) /* zero row */]) {
+      const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+      let err: unknown;
+      try {
+        ivf.add([...good.slice(0, 10), poison, ...good.slice(10)]);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(EncodeError);
+      expect(ivf.size).toBe(0); // nothing appended
+      expect(ivf.ivfActive).toBe(false); // nothing trained on the poisoned batch
+      ivf.add(good); // the decision is NOT frozen by the failed batch
+      expect(ivf.ivfActive).toBe(true);
+      expect(ivf.size).toBe(good.length);
+    }
+  });
+
+  it('validates the first calibration batch the same way', () => {
+    const rng = createRng(16);
+    const good = Array.from({ length: CALIBRATION_MIN_SAMPLES }, () => {
+      const v = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) v[i] = rng.nextGaussian();
+      return v;
+    });
+    const idx = new TurboQuantIndex({ dim: IDIM, calibrate: true, wasm: false });
+    const poisoned = [...good];
+    poisoned[7] = new Float32Array(IDIM); // zero row
+    let err: unknown;
+    try {
+      idx.add(poisoned);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(EncodeError);
+    expect(idx.size).toBe(0);
+    expect(idx.calibrated).toBe(false);
+    idx.add(good); // decision not frozen; a clean batch still calibrates
+    expect(idx.calibrated).toBe(true);
+  });
+});
+
+describe('TurboQuantIndex — IVF oracle with tied scores', () => {
+  const IDIM = 32;
+
+  it('nprobe = nlist matches the flat scan exactly even with duplicate vectors (boundary ties)', () => {
+    const rng = createRng(77);
+    // 4 tight clusters; every vector duplicated 3× → exact rankKey ties everywhere,
+    // including at the k boundary. The top-k heap keeps tied candidates by visit
+    // order, so the oracle is unconditional only because nprobe = nlist routes to
+    // the canonical flat scan — this guards that routing against regression.
+    const base: Float32Array[] = [];
+    for (let b = 0; b < 4; b++) {
+      const center = new Float32Array(IDIM);
+      for (let i = 0; i < IDIM; i++) center[i] = rng.nextGaussian() * 10;
+      for (let j = 0; j < 10; j++) {
+        const v = new Float32Array(IDIM);
+        for (let i = 0; i < IDIM; i++) v[i] = center[i]! + rng.nextGaussian();
+        base.push(v);
+      }
+    }
+    const data: Float32Array[] = [];
+    for (const v of base) data.push(v, Float32Array.from(v), Float32Array.from(v));
+
+    const flat = new TurboQuantIndex({ dim: IDIM, wasm: false });
+    const ivf = new TurboQuantIndex({ dim: IDIM, ivf: { nlist: 4 } });
+    flat.add(data);
+    ivf.add(data);
+    for (const q of base.slice(0, 8)) {
+      for (const k of [2, 4, 7]) {
+        const a = flat.search(q, k);
+        const b = ivf.search(q, k, { nprobe: 4 });
+        expect(Array.from(b.indices)).toEqual(Array.from(a.indices));
+        expect(Array.from(b.scores)).toEqual(Array.from(a.scores));
+      }
+    }
+  });
+});

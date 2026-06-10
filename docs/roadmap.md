@@ -43,11 +43,22 @@ merges only when the gate is green (typecheck, lint, tests, coverage) and review
   `benchmarks/results/`. GloVe-200 exercises the dense Householder rotation (dim=200,
   non-power-of-two); dbpedia-OpenAI-100k exercises the FWHT path (dim=1536, power-of-two).
 
+- **IVF / coarse quantizer** — opt-in (`ivf: { nlist, nprobe? }`) sublinear search for large
+  corpora: seeded k-means++ cells (spherical for cosine/dot, L2 for euclidean) trained from the
+  first ≥ nlist-vector batch and frozen (same contract as calibration), posting lists kept in
+  lockstep with swap-remove (full remove parity), per-query `nprobe` knob, and serialization in
+  format v2. The probed-cell scan reuses the exact scalar kernel, so `nprobe = nlist` reproduces
+  the flat scan bit-for-bit. Measured (20k × 768-d clustered, 4-bit): **11.4× QPS at the flat
+  scan's recall** (nprobe = 8/128), 22.8× at nprobe = 1. Full parity through `IdMapIndex` and
+  `Collection` (`ivf` config + `nprobe` search param).
+
 ## Planned
 
-- **IVF / coarse quantizer** for sublinear search on 10M+ corpora.
+_(none — all planned waves have shipped)_
 
 ## Non-goals (for now)
 
-- An HNSW graph index — quantvec is deliberately a flat quantized index; IVF is the planned path to scale.
-- A trained/learned codebook — the data-oblivious, zero-training property is the point.
+- An HNSW graph index — quantvec is deliberately a flat quantized index; IVF (shipped) is the path to scale.
+- A trained/learned codebook — the data-oblivious, zero-training property is the point. (The IVF
+  coarse quantizer trains only the cell _partition_, never the per-coordinate codebook — codes stay
+  data-oblivious.)

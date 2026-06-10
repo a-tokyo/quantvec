@@ -87,3 +87,21 @@ The SIMD scan cost is O(n) while the rescore-pool overhead is constant, so the g
   embeddings; neutral-to-negative on well-conditioned synthetic data.
 - **FWHT** is used automatically for power-of-two dims (128, 256, 512, 768, 1024, 1536…); O(d·log d)
   vs O(d²) for the dense rotation — ~25× faster encode at no recall cost.
+
+## IVF coarse quantizer (synthetic, clustered)
+
+`npm run bench:ivf` — 20k × 768-d Gaussian-mixture corpus (64 clusters), cosine, 4-bit, `nlist=128`,
+sweeping `nprobe` against the flat scalar baseline (env knobs: `DIM`, `N`, `NQ`, `CLUSTERS`, `NLIST`):
+
+| config  | recall@10 | QPS  | speedup vs flat |
+| ------- | --------- | ---- | --------------- |
+| flat    | 0.603     | 53   | 1.0×            |
+| ivf@1   | 0.387     | 1205 | 22.8×           |
+| ivf@4   | 0.602     | 852  | 16.1×           |
+| ivf@8   | 0.603     | 600  | 11.4×           |
+| ivf@128 | 0.603     | 60   | 1.1×            |
+
+Recall is measured against the exact **float32** ground truth, so the 0.603 ceiling is the 4-bit
+quantizer's own recall (the flat row) — IVF reaches that ceiling while probing 6% of the cells
+(`nprobe=8`), and `nprobe = nlist` reproduces the flat scan exactly (the `searchSlots` oracle). The
+speedup grows with corpus size: the probed-cell scan is O(n·nprobe/nlist) while flat is O(n).

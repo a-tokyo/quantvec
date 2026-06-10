@@ -163,3 +163,46 @@ describe('Collection — mutation', () => {
     expect(c.get(2)).toEqual({ tag: 'blog', year: 2023 });
   });
 });
+
+describe('Collection — IVF config passthrough', () => {
+  function ivfCollection(): Collection<Doc, number> {
+    const c = createCollection<Doc, number>({
+      vectors: { size: 8, distance: 'cosine' },
+      quantization: { bits: 4 },
+      ivf: { nlist: 2, nprobe: 1 },
+    });
+    // Two clusters along orthogonal directions; 4 points ≥ nlist trains the quantizer.
+    c.upsert([
+      { id: 1, vector: V[0]!, payload: { tag: 'a', year: 2020 } },
+      { id: 2, vector: V[1]!, payload: { tag: 'b', year: 2021 } },
+      { id: 3, vector: V[2]!, payload: { tag: 'a', year: 2022 } },
+      { id: 4, vector: V[3]!, payload: { tag: 'b', year: 2023 } },
+    ]);
+    return c;
+  }
+
+  it('first upsert trains the coarse quantizer; search works with nprobe override', () => {
+    const c = ivfCollection();
+    const hits = c.search(V[2]!, { limit: 2, nprobe: 2 });
+    expect(hits[0]!.id).toBe(3);
+    expect(hits[0]!.payload).toEqual({ tag: 'a', year: 2022 });
+  });
+
+  it('filters and deletes compose with IVF', () => {
+    const c = ivfCollection();
+    const hits = c.search(V[0]!, {
+      limit: 4,
+      nprobe: 2,
+      filter: { must: [{ key: 'tag', match: { value: 'a' } }] },
+    });
+    expect(hits.every((h) => h.payload!.tag === 'a')).toBe(true);
+    c.delete([1, 3]);
+    expect(c.size).toBe(2);
+    expect(
+      c
+        .search(V[1]!, { limit: 4, nprobe: 2 })
+        .map((h) => h.id)
+        .sort(),
+    ).toEqual([2, 4]);
+  });
+});

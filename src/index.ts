@@ -15,7 +15,11 @@ export const VERSION: string = __QUANTVEC_VERSION__;
 
 // ── Core positional index ─────────────────────────────────────────────────────
 export { TurboQuantIndex, IndexError } from './index/turboquant-index';
-export type { TurboQuantIndexOptions, IndexSearchOptions } from './index/turboquant-index';
+export type {
+  TurboQuantIndexOptions,
+  IndexSearchOptions,
+  IvfOptions,
+} from './index/turboquant-index';
 
 // ── Stable id-keyed index ─────────────────────────────────────────────────────
 export { IdMapIndex, IdMapError } from './index/id-map-index';

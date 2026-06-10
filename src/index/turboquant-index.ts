@@ -22,13 +22,14 @@ import { fitCalibration } from '../core/calibrate';
 import type { Calibration } from '../core/calibrate';
 import { getCodebook } from '../core/codebook';
 import type { Bits, Codebook } from '../core/codebook';
-import { createEncodeScratch, encodeVector } from '../core/encode';
+import { createEncodeScratch, encodeVector, validateVectorBatch } from '../core/encode';
 import type { EncodeOptions, EncodeScratch } from '../core/encode';
 import { scoreMetric } from '../core/metrics';
 import type { Distance, QueryNorms } from '../core/metrics';
 import { createRotation } from '../core/rotation';
 import type { Rotation } from '../core/rotation';
-import { buildQueryLut, searchFlat, SearchError } from '../core/search';
+import { buildQueryLut, searchFlat, searchSlots, validateQuery, SearchError } from '../core/search';
+import { CoarseQuantizer, defaultNprobe } from './coarse';
 import type { EncodedDb, SearchOptions, SearchResult } from '../core/search';
 import { TopK } from '../core/topk';
 import { WasmKernel } from '../wasm/kernel';
@@ -44,6 +45,8 @@ export class IndexError extends Error {
     | 'INVALID_LENGTH'
     | 'INVALID_VECTOR'
     | 'INVALID_INDEX'
+    | 'INVALID_NLIST'
+    | 'INVALID_NPROBE'
     | 'EMPTY'
     | 'WRONG_KIND';
   constructor(code: IndexError['code'], message: string) {
@@ -51,6 +54,22 @@ export class IndexError extends Error {
     this.name = 'IndexError';
     this.code = code;
   }
+}
+
+/** IVF (inverted-file) coarse-quantizer options — see {@link TurboQuantIndexOptions.ivf}. */
+export interface IvfOptions {
+  /**
+   * Number of coarse cells (posting lists); integer in [2, 2^22]. Rule of thumb:
+   * ~√n cells for an n-vector corpus; training quality wants a first batch of
+   * at least ~32·nlist vectors (the hard minimum is nlist).
+   */
+  nlist: number;
+  /**
+   * Default number of cells probed per query; integer in [1, nlist]. Higher =
+   * better recall, slower. Defaults to max(1, ⌈nlist/8⌉). Overridable per query
+   * via {@link IndexSearchOptions.nprobe}.
+   */
+  nprobe?: number;
 }
 
 /** Construction options for {@link TurboQuantIndex}. */
@@ -92,6 +111,16 @@ export interface TurboQuantIndexOptions {
    * the exact scan).
    */
   fastscan?: boolean;
+  /**
+   * Enable IVF coarse-quantized search (default off). When the first non-empty add
+   * supplies at least `nlist` vectors, a k-means coarse quantizer is trained from that
+   * batch and frozen for the index's lifetime; queries then probe only the `nprobe`
+   * nearest cells instead of scanning all vectors — sublinear work on large corpora.
+   * A smaller first batch freezes the index flat forever (same contract as
+   * `calibrate`). While IVF is active the WASM/FastScan whole-database kernels are
+   * bypassed (the probed-cell scan is scalar; a cell-resident kernel is a future wave).
+   */
+  ivf?: IvfOptions;
 }
 
 /** Per-query options for {@link TurboQuantIndex.search}. */
@@ -100,6 +129,12 @@ export interface IndexSearchOptions {
   metric?: Distance;
   /** Optional allowlist (length = size): vector j is scanned only if mask[j] is truthy. */
   mask?: Uint8Array | boolean[];
+  /**
+   * Override the IVF probe breadth for this query (integer in [1, nlist]). Ignored
+   * when IVF is not active — the same call site legitimately runs both before and
+   * after the training decision freezes.
+   */
+  nprobe?: number;
 }
 
 /** Initial backing-array capacity before the first growth (kept small; doubles on demand). */
@@ -123,6 +158,33 @@ function validateDim(dim: number): void {
 function validateSeed(seed: number): void {
   if (!Number.isFinite(seed)) {
     throw new IndexError('INVALID_SEED', `seed must be finite, got ${seed}`);
+  }
+}
+
+/** Upper bound on nlist: keeps the u32 serialization field honest and the centroid
+ *  allocation sane (4M cells is far beyond the library's corpus-scale target). */
+const MAX_NLIST = 1 << 22;
+
+/** Validate {@link IvfOptions}, returning the resolved default nprobe. */
+function validateIvf(ivf: IvfOptions): number {
+  const { nlist } = ivf;
+  if (!Number.isInteger(nlist) || nlist < 2 || nlist > MAX_NLIST) {
+    throw new IndexError(
+      'INVALID_NLIST',
+      `ivf.nlist must be an integer in [2, 2^22], got ${nlist}`,
+    );
+  }
+  const nprobe = ivf.nprobe ?? defaultNprobe(nlist);
+  validateNprobe(nprobe, nlist);
+  return nprobe;
+}
+
+function validateNprobe(nprobe: number, nlist: number): void {
+  if (!Number.isInteger(nprobe) || nprobe < 1 || nprobe > nlist) {
+    throw new IndexError(
+      'INVALID_NPROBE',
+      `nprobe must be an integer in [1, nlist=${nlist}], got ${nprobe}`,
+    );
   }
 }
 
@@ -187,6 +249,12 @@ export class TurboQuantIndex {
   #wasm: WasmKernel | null | undefined;
   /** True when the resident WASM codes are stale (mutation since last upload). */
   #wasmDirty: boolean;
+  /** Requested IVF config with the default nprobe resolved, or undefined when off. */
+  readonly #ivfOpts: { nlist: number; nprobe: number } | undefined;
+  /** Trained IVF coarse quantizer, or undefined while flat. */
+  #coarse: CoarseQuantizer | undefined;
+  /** Once true, the IVF training decision is locked for the index's lifetime. */
+  #ivfFrozen: boolean;
 
   constructor(options: TurboQuantIndexOptions) {
     const {
@@ -197,10 +265,14 @@ export class TurboQuantIndex {
       calibrate = false,
       wasm = true,
       fastscan = false,
+      ivf,
     } = options;
     validateDim(dim);
     validateBits(bits);
     validateSeed(seed);
+    this.#ivfOpts = ivf === undefined ? undefined : { nlist: ivf.nlist, nprobe: validateIvf(ivf) };
+    this.#coarse = undefined;
+    this.#ivfFrozen = false;
 
     this.#dim = dim;
     this.#bits = bits;
@@ -253,6 +325,11 @@ export class TurboQuantIndex {
     return this.#calibration !== undefined;
   }
 
+  /** Whether an IVF coarse quantizer was trained and is in effect. */
+  get ivfActive(): boolean {
+    return this.#coarse !== undefined;
+  }
+
   /**
    * Whether the v128 FastScan candidate-pool path is active for this index. This is a
    * perf-hint constructor option (and requires `bits === 4`) — it is not part of the
@@ -301,6 +378,8 @@ export class TurboQuantIndex {
     this.#norms[slot] = encoded.norm;
     this.#n = slot + 1;
     this.#wasmDirty = true;
+    // The raw (unrotated) vector is exactly what cell assignment ranks against.
+    if (this.#coarse !== undefined) this.#coarse.addSlot(slot, vec);
   }
 
   /** Normalize an `add`/`addWithIds` batch argument to validated per-vector views. */
@@ -358,6 +437,28 @@ export class TurboQuantIndex {
   }
 
   /**
+   * @internal Train and freeze the IVF coarse quantizer from the first eligible batch
+   * (only when the index is still empty, `ivf` is enabled, and the batch has at least
+   * `nlist` vectors — the hard k-means floor; ≥ ~32·nlist recommended for quality);
+   * otherwise lock the flat decision. An empty batch is a no-op so it does not
+   * prematurely freeze. Shared by {@link add} and {@link IdMapIndex}.
+   */
+  trainIvfFromBatch(vecs: readonly Float32Array[]): void {
+    if (this.#ivfFrozen || this.#n !== 0 || vecs.length === 0) return;
+    if (this.#ivfOpts !== undefined && vecs.length >= this.#ivfOpts.nlist) {
+      this.#coarse = CoarseQuantizer.train(
+        vecs,
+        this.#ivfOpts.nlist,
+        this.#ivfOpts.nprobe,
+        this.#metric,
+        this.#dim,
+        this.#seed,
+      );
+    }
+    this.#ivfFrozen = true;
+  }
+
+  /**
    * Add one or more vectors. Accepts a flat `Float32Array` of m·dim values (m
    * vectors laid out row-major), or an array of per-vector `Float32Array` /
    * `number[]`. Each vector is encoded and appended in insertion order.
@@ -368,11 +469,24 @@ export class TurboQuantIndex {
    * @throws {EncodeError} (re-thrown) on a non-finite or zero vector, or
    *   (`'DEGENERATE'`, calibrated indexes only) a vector so far outside the calibrated
    *   distribution that it cannot be encoded faithfully. Note: a batch is appended in
-   *   order, so an encode error mid-batch leaves the preceding vectors added.
+   *   order, so an encode error mid-batch leaves the preceding vectors added — except
+   *   the first batch of a `calibrate`/`ivf` index, which is validated atomically up
+   *   front (a bad row would otherwise poison the frozen calibration/centroids before
+   *   encode could reject it), so it leaves the index completely unchanged.
    */
   add(vectors: Float32Array | number[][] | Float32Array[]): void {
     const vecs = this.#toVectorArray(vectors);
+    // A pending training decision must only ever see a valid batch: a non-finite or
+    // zero row would poison the calibration fit / k-means centroids that are about to
+    // be frozen. Validate atomically before fitting (IdMapIndex/Collection already do).
+    const trainingPending =
+      this.#n === 0 &&
+      vecs.length > 0 &&
+      ((this.#calibrate && !this.#calibrationFrozen) ||
+        (this.#ivfOpts !== undefined && !this.#ivfFrozen));
+    if (trainingPending) validateVectorBatch(vecs);
     this.fitCalibrationFromBatch(vecs); // first eligible batch fits + freezes TQ+
+    this.trainIvfFromBatch(vecs); // first eligible batch trains + freezes IVF
     this.#ensureCapacity(this.#n + vecs.length);
     for (let j = 0; j < vecs.length; j++) this.#appendOne(vecs[j]!);
   }
@@ -395,10 +509,13 @@ export class TurboQuantIndex {
     this.#appendOne(vec instanceof Float32Array ? vec : Float32Array.from(vec));
   }
 
-  /** Remove all vectors, resetting the live count to 0 (backing capacity is retained). */
+  /** Remove all vectors, resetting the live count to 0 (backing capacity is retained).
+   *  A trained IVF quantizer keeps its centroids — clearing data does not unfreeze
+   *  the training decision (same contract as calibration). */
   clear(): void {
     this.#n = 0;
     this.#wasmDirty = true;
+    this.#coarse?.clear();
   }
 
   /** Build a read-only {@link EncodedDb} view over the live rows (no copy). */
@@ -442,6 +559,29 @@ export class TurboQuantIndex {
     const metric = opts.metric ?? this.#metric;
     const searchOpts: SearchOptions =
       opts.mask === undefined ? { metric } : { metric, mask: opts.mask };
+
+    // ── IVF: probe the nprobe nearest cells, scan only their slots ──────────
+    // The whole-database WASM/FastScan kernels are bypassed while IVF is active
+    // (the probed-cell scan is scalar; a cell-resident kernel is a future wave).
+    // `opts.nprobe` is ignored when flat — the same call site legitimately runs
+    // both before and after the training decision freezes.
+    if (this.#coarse !== undefined) {
+      const nprobe = opts.nprobe ?? this.#coarse.defaultNprobe;
+      validateNprobe(nprobe, this.#coarse.nlist);
+      // Same typed errors as the flat path, checked BEFORE the centroid probe so a
+      // malformed query (wrong length / non-finite / zero) never reaches the probe
+      // arithmetic. searchSlots re-validates via the shared preamble — cheap (O(dim)).
+      validateQuery(query, this.#dim);
+      // nprobe = nlist must reproduce the flat scan EXACTLY (the IVF oracle). The
+      // probed scan visits slots in posting-list order, and the top-k heap drops
+      // boundary ties, so with duplicate vectors the kept set is order-dependent —
+      // scan in canonical slot order instead (also skips a pointless full probe).
+      if (nprobe === this.#coarse.nlist) {
+        return searchFlat(this.#db(), query, k, searchOpts);
+      }
+      const slots = this.#coarse.probe(query, nprobe);
+      return searchSlots(this.#db(), query, k, slots, searchOpts);
+    }
 
     if (this.#wasmEnabled) {
       if (this.#wasm === undefined) this.#wasm = WasmKernel.create();
@@ -576,6 +716,7 @@ export class TurboQuantIndex {
     }
     this.#n = last;
     this.#wasmDirty = true;
+    this.#coarse?.swapRemove(i, last);
   }
 
   /**
@@ -597,6 +738,14 @@ export class TurboQuantIndex {
       norms: this.#norms.subarray(0, n),
     };
     if (this.#calibration !== undefined) payload.calibration = this.#calibration;
+    if (this.#coarse !== undefined) {
+      payload.ivf = {
+        nlist: this.#coarse.nlist,
+        nprobe: this.#coarse.defaultNprobe,
+        centroids: this.#coarse.centroids,
+        listForSlot: this.#coarse.listForSlotSnapshot(n),
+      };
+    }
     return payload;
   }
 
@@ -620,6 +769,18 @@ export class TurboQuantIndex {
     // Adopt the stored calibration and lock the decision (so later adds don't refit).
     if (payload.calibration !== undefined) idx.#calibration = payload.calibration;
     idx.#calibrationFrozen = true;
+    // Adopt the stored IVF state the same way (postings rebuilt from listForSlot).
+    if (payload.ivf !== undefined) {
+      idx.#coarse = CoarseQuantizer.fromState(
+        payload.ivf.centroids,
+        payload.ivf.listForSlot,
+        payload.ivf.nlist,
+        payload.ivf.nprobe,
+        payload.metric,
+        payload.dim,
+      );
+    }
+    idx.#ivfFrozen = true;
     return idx;
   }
 

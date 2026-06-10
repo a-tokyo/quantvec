@@ -33,10 +33,10 @@ function fixedEnd(n: number): number {
   return 24 + (n * DIM * BITS) / 8 + 2 * n * 4;
 }
 
-/** Start of the ids section: fixed region + the 1-byte calibration-presence flag
- * (the test payloads carry no calibration, so the flag is a single 0 byte). */
+/** Start of the ids section: fixed region + the 1-byte calibration-presence flag +
+ * the 1-byte ivf-presence flag (the test payloads carry neither, so both are 0). */
 function idsStart(n: number): number {
-  return fixedEnd(n) + 1;
+  return fixedEnd(n) + 2;
 }
 
 function expectDeserializeError(bytes: Uint8Array, code: DeserializeError['code']): void {
@@ -127,10 +127,12 @@ describe('deserialize — untrusted input validation', () => {
     expectDeserializeError(b, 'BAD_MAGIC');
   });
 
-  it('rejects an unsupported version', () => {
-    const b = validPos();
-    b[OFF.version] = 2;
-    expectDeserializeError(b, 'BAD_VERSION');
+  it('rejects an unsupported version (v1 buffers included — D-010 bump-and-rewrite)', () => {
+    for (const v of [1, 3]) {
+      const b = validPos();
+      b[OFF.version] = v;
+      expectDeserializeError(b, 'BAD_VERSION');
+    }
   });
 
   it('rejects an unknown kind', () => {
@@ -307,5 +309,134 @@ describe('serialize — input typing', () => {
   it('accepts the discriminated union without leaking ids on the positional branch', () => {
     const payload: SerializableIndex = { kind: 'positional', ...positionalPayload(1) };
     expect(serializeIndex(payload)).toBeInstanceOf(Uint8Array);
+  });
+});
+
+// ── IVF section (format v2) ─────────────────────────────────────────────────────
+
+/** A self-consistent IVF payload for an n-row index with `nlist` cells. */
+function ivfPayload(n: number, nlist = 2): NonNullable<IndexPayload['ivf']> {
+  const centroids = new Float32Array(nlist * DIM);
+  for (let i = 0; i < centroids.length; i++) centroids[i] = (i % 5) - 2; // exact in f32
+  const listForSlot = new Int32Array(n);
+  for (let i = 0; i < n; i++) listForSlot[i] = i % nlist;
+  return { nlist, nprobe: 1, centroids, listForSlot };
+}
+
+/** Byte offset of the ivf flag (fixed region + 1 calibration flag byte). */
+function ivfFlagAt(n: number): number {
+  return fixedEnd(n) + 1;
+}
+
+describe('serialize/deserialize — ivf section', () => {
+  it('round-trips ivf state for both kinds, with and without calibration', () => {
+    const ivf = ivfPayload(3, 2);
+    const pos: SerializableIndex = { kind: 'positional', ...positionalPayload(3), ivf };
+    const parsedPos = deserializeIndex(serializeIndex(pos));
+    expect(parsedPos.ivf).toBeDefined();
+    expect(parsedPos.ivf!.nlist).toBe(2);
+    expect(parsedPos.ivf!.nprobe).toBe(1);
+    expect(Array.from(parsedPos.ivf!.centroids)).toEqual(Array.from(ivf.centroids));
+    expect(Array.from(parsedPos.ivf!.listForSlot)).toEqual(Array.from(ivf.listForSlot));
+
+    const calibration = {
+      shift: new Float32Array(DIM).fill(0.25),
+      scale: new Float32Array(DIM).fill(1.5),
+    };
+    const both: SerializableIndex = {
+      kind: 'idmap',
+      ...positionalPayload(3),
+      calibration,
+      ivf,
+      ids: [7, 8, 9],
+    };
+    const parsedBoth = deserializeIndex(serializeIndex(both));
+    expect(parsedBoth.calibration).toBeDefined();
+    expect(parsedBoth.ivf).toBeDefined();
+    expect((parsedBoth as { ids: IdType[] }).ids).toEqual([7, 8, 9]);
+    expect(Array.from(parsedBoth.ivf!.listForSlot)).toEqual([0, 1, 0]);
+  });
+
+  it('round-trips an empty (n = 0) index with ivf present — trained then cleared', () => {
+    const parsed = deserializeIndex(
+      serializeIndex({ kind: 'positional', ...positionalPayload(0), ivf: ivfPayload(0, 2) }),
+    );
+    expect(parsed.ivf!.listForSlot.length).toBe(0);
+    expect(parsed.ivf!.centroids.length).toBe(2 * DIM);
+  });
+
+  it('omits the section cleanly when absent (flag 0)', () => {
+    const parsed = deserializeIndex(
+      serializeIndex({ kind: 'positional', ...positionalPayload(2) }),
+    );
+    expect(parsed.ivf).toBeUndefined();
+  });
+
+  function craftedIvf(
+    mutate: (b: Uint8Array, dv: DataView, flagAt: number) => Uint8Array | void,
+  ): Uint8Array {
+    const bytes = serializeIndex({
+      kind: 'positional',
+      ...positionalPayload(2),
+      ivf: ivfPayload(2, 2),
+    });
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return mutate(bytes, dv, ivfFlagAt(2)) ?? bytes;
+  }
+
+  it('rejects an invalid ivf flag byte', () => {
+    expectDeserializeError(
+      craftedIvf((b, _dv, at) => void (b[at] = 7)),
+      'BAD_IVF',
+    );
+  });
+
+  it('rejects truncation before nlist/nprobe', () => {
+    expectDeserializeError(
+      craftedIvf((b, _dv, at) => b.slice(0, at + 3)),
+      'BAD_IVF',
+    );
+  });
+
+  it.each([0, 1, (1 << 22) + 1])('rejects nlist = %s out of [2, 2^22]', (nlist) => {
+    expectDeserializeError(
+      craftedIvf((_b, dv, at) => void dv.setUint32(at + 1, nlist, true)),
+      'BAD_IVF',
+    );
+  });
+
+  it.each([0, 3])('rejects nprobe = %s outside [1, nlist = 2]', (nprobe) => {
+    expectDeserializeError(
+      craftedIvf((_b, dv, at) => void dv.setUint32(at + 5, nprobe, true)),
+      'BAD_IVF',
+    );
+  });
+
+  it('rejects a truncated centroids/listForSlot region', () => {
+    expectDeserializeError(
+      craftedIvf((b, _dv, at) => b.slice(0, at + 9 + 4)),
+      'BAD_IVF',
+    );
+  });
+
+  it('rejects a non-finite centroid coordinate', () => {
+    expectDeserializeError(
+      craftedIvf((_b, dv, at) => void dv.setFloat32(at + 9, Number.NaN, true)),
+      'BAD_IVF',
+    );
+  });
+
+  it('rejects a listForSlot entry >= nlist', () => {
+    expectDeserializeError(
+      craftedIvf((_b, dv, at) => void dv.setUint32(at + 9 + 2 * DIM * 4, 2, true)),
+      'BAD_IVF',
+    );
+  });
+
+  it('rejects trailing bytes after the ivf section (positional)', () => {
+    const ok = craftedIvf(() => undefined);
+    const extended = new Uint8Array(ok.length + 3);
+    extended.set(ok);
+    expectDeserializeError(extended, 'BAD_LENGTH');
   });
 });

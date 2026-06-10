@@ -288,3 +288,56 @@ describe('IdMapIndex — TQ+ calibration', () => {
     expect(restored.has(0)).toBe(true);
   });
 });
+
+describe('IdMapIndex — IVF passthrough', () => {
+  const VDIM = 16;
+
+  function vecsAround(center: number, n: number, seed: number): Float32Array[] {
+    const rng = createRng(seed);
+    return Array.from({ length: n }, () => {
+      const v = new Float32Array(VDIM);
+      for (let i = 0; i < VDIM; i++) v[i] = center + rng.nextGaussian();
+      return v;
+    });
+  }
+
+  it('trains from the first addWithIds batch and searches by id', () => {
+    const data = [...vecsAround(10, 20, 1), ...vecsAround(-10, 20, 2)];
+    const ids = data.map((_, i) => 1000 + i);
+    const idx = new IdMapIndex<number>({ dim: VDIM, ivf: { nlist: 2 } });
+    idx.addWithIds(ids, data);
+    expect(idx.ivfActive).toBe(true);
+    const res = idx.search(data[5]!, 3, { nprobe: 2 });
+    expect(res.ids).toContain(1005);
+  });
+
+  it('remove keeps parity with a flat twin; round-trip preserves ivf + id mapping', () => {
+    const data = [...vecsAround(10, 15, 3), ...vecsAround(-10, 15, 4)];
+    const ids = data.map((_, i) => `p${i}`);
+    const ivf = new IdMapIndex<string>({ dim: VDIM, ivf: { nlist: 2 } });
+    const flat = new IdMapIndex<string>({ dim: VDIM, wasm: false });
+    ivf.addWithIds(ids, data);
+    flat.addWithIds(ids, data);
+    for (const victim of ['p3', 'p17', 'p0']) {
+      ivf.remove(victim);
+      flat.remove(victim);
+    }
+    const a = flat.search(data[5]!, 5);
+    const b = ivf.search(data[5]!, 5, { nprobe: 2 });
+    expect(b.ids).toEqual(a.ids);
+
+    const restored = IdMapIndex.fromBytes(ivf.toBytes());
+    expect(restored.ivfActive).toBe(true);
+    expect(restored.search(data[5]!, 5, { nprobe: 2 }).ids).toEqual(b.ids);
+  });
+
+  it('filter predicates compose with the probed-cell scan', () => {
+    const data = [...vecsAround(10, 20, 5), ...vecsAround(-10, 20, 6)];
+    const ids = data.map((_, i) => i);
+    const idx = new IdMapIndex<number>({ dim: VDIM, ivf: { nlist: 2 } });
+    idx.addWithIds(ids, data);
+    const res = idx.search(data[0]!, 10, { nprobe: 2, filter: (id) => id % 2 === 0 });
+    expect(res.ids.every((id) => id % 2 === 0)).toBe(true);
+    expect(res.ids.length).toBeGreaterThan(0);
+  });
+});

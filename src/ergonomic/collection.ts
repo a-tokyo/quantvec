@@ -31,6 +31,7 @@ export class Collection<P = unknown, Id extends IdType = number | string> {
     };
     if (config.seed !== undefined) opts.seed = config.seed;
     if (config.calibrate !== undefined) opts.calibrate = config.calibrate;
+    if (config.ivf !== undefined) opts.ivf = config.ivf;
     this.#index = new IdMapIndex<Id>(opts);
     this.#payloads = new Map();
   }
@@ -101,6 +102,7 @@ export class Collection<P = unknown, Id extends IdType = number | string> {
     const withPayload = params.withPayload !== false;
 
     const opts: IdMapSearchOptions<Id> = {};
+    if (params.nprobe !== undefined) opts.nprobe = params.nprobe;
     if (params.filter !== undefined) {
       const predicate = compileFilter(params.filter);
       opts.filter = (id) => predicate(id, this.#payloads.get(id));

@@ -12,6 +12,9 @@ An end-to-end tour of the two index classes, metrics, filtering, persistence, an
 - **`Collection<P>`** — the ergonomic, qdrant-style layer: payloads + a structured filter DSL on top
   of `IdMapIndex` (see [Collections](#collections-payloads--filters)).
 
+All three layers accept the same scaling knobs: `calibrate` (TQ+), `fastscan` (4-bit SIMD), and
+`ivf` (coarse-quantized sublinear search — see [IVF](#ivf-coarse-quantizer)).
+
 ## Adding vectors
 
 ```ts
@@ -105,13 +108,13 @@ try {
 }
 ```
 
-| Error              | Sample codes                                                                                                              |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `IndexError`       | `INVALID_DIM`, `INVALID_BITS`, `INVALID_SEED`, `INVALID_VECTOR`, `INVALID_LENGTH`, `INVALID_INDEX`, `EMPTY`, `WRONG_KIND` |
-| `IdMapError`       | `DUPLICATE_ID`, `UNKNOWN_ID`, `COUNT_MISMATCH`, `INVALID_ID_TYPE`, `INVALID_VECTOR`, `EMPTY`, `WRONG_KIND`                |
-| `DeserializeError` | `BAD_MAGIC`, `BAD_VERSION`, `BAD_KIND`, `BAD_DIM`, `BAD_SEED`, `BAD_LENGTH`, `BAD_ID`, `TOO_SHORT`                        |
-| `EncodeError`      | `ZERO_VECTOR`, `INVALID_LENGTH`, `DEGENERATE`                                                                             |
-| `SearchError`      | `INVALID_K`, `ZERO_QUERY`, `INVALID_MASK`                                                                                 |
+| Error              | Sample codes                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `IndexError`       | `INVALID_DIM`, `INVALID_BITS`, `INVALID_SEED`, `INVALID_VECTOR`, `INVALID_LENGTH`, `INVALID_INDEX`, `INVALID_NLIST`, `INVALID_NPROBE`, `EMPTY`, `WRONG_KIND` |
+| `IdMapError`       | `DUPLICATE_ID`, `UNKNOWN_ID`, `COUNT_MISMATCH`, `INVALID_ID_TYPE`, `INVALID_VECTOR`, `EMPTY`, `WRONG_KIND`                                                   |
+| `DeserializeError` | `BAD_MAGIC`, `BAD_VERSION`, `BAD_KIND`, `BAD_DIM`, `BAD_SEED`, `BAD_LENGTH`, `BAD_ID`, `BAD_IVF`, `TOO_SHORT`                                                |
+| `EncodeError`      | `ZERO_VECTOR`, `INVALID_LENGTH`, `DEGENERATE`                                                                                                                |
+| `SearchError`      | `INVALID_K`, `ZERO_QUERY`, `INVALID_MASK`, `INVALID_SLOT`                                                                                                    |
 
 ## Calibration (TQ+)
 
@@ -135,6 +138,37 @@ Because the calibration is frozen from the first batch, a later vector that lies
 distribution (e.g. anti-correlated with a tight calibration cluster) may not be encodable faithfully;
 `add` rejects it with `EncodeError` code `DEGENERATE`. If your data drifts that far, rebuild the index
 without `calibrate`.
+
+## IVF (coarse quantizer)
+
+For large corpora the O(n) flat scan becomes the bottleneck. Enabling `ivf` partitions the corpus
+into `nlist` k-means cells; each query ranks the cell centroids and scans only the `nprobe` nearest
+cells:
+
+```ts
+const idx = new TurboQuantIndex({ dim: 768, ivf: { nlist: 256 } });
+idx.add(corpus); // first add of ≥ nlist vectors trains + freezes the cells
+idx.ivfActive; // → true
+idx.search(q, 10); // probes ⌈nlist/8⌉ cells by default
+idx.search(q, 10, { nprobe: 64 }); // recall/speed knob, per query
+```
+
+- **Training**: the cells are fit (seeded k-means++, spherical for cosine/dot, L2 for euclidean)
+  from the **first** non-empty add and frozen for the index's lifetime — exactly the calibration
+  contract. The hard minimum is `nlist` vectors (≥ ~32·nlist recommended); a smaller first batch
+  freezes the index flat forever. Choose `nlist ≈ √n` as a starting point.
+- **Exactness**: the probed-cell scan uses the same exact scalar kernel as the flat path, so
+  `nprobe = nlist` reproduces the flat scan bit-for-bit; smaller `nprobe` trades recall for speed
+  (measured: ~11× QPS at the flat scan's recall with `nprobe = nlist/16` on clustered data).
+- **Mutations**: `add`/`addOne` assign new vectors to their nearest cell; `swapRemove`/`remove`
+  keep the posting lists in lockstep (full parity with the flat index); `clear()` keeps the trained
+  cells. Serialization round-trips the whole structure (format v2).
+- **Trade-offs**: while IVF is active the whole-database WASM/FastScan kernels are bypassed (a
+  cell-resident kernel is a future wave), and `calibrate`'s `DEGENERATE` caveat applies to cell
+  quality too: heavy data drift after training degrades the partition — rebuild to retrain.
+
+The same knobs flow through the other layers: `new IdMapIndex({ dim, ivf: { nlist } })` and
+`createCollection({ ..., ivf: { nlist } })`, with `nprobe` accepted by their search options.
 
 ## Collections (payloads + filters)
 

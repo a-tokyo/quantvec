@@ -71,6 +71,7 @@
     "test:coverage": "vitest run --coverage --test-timeout=30000",
     "bench": "vitest bench --run",
     "bench:flat": "npx tsx benchmarks/flat.ts",
+    "bench:ivf": "npx tsx benchmarks/ivf.ts",
     "bench:real": "node benchmarks/download-siftsmall.mjs && npx tsx benchmarks/real.ts",
     "bench:glove": "node benchmarks/download-glove.mjs && npx tsx benchmarks/glove.ts",
     "bench:openai": "node benchmarks/download-openai.mjs && npx tsx benchmarks/openai.ts",
