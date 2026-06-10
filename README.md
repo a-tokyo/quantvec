@@ -12,7 +12,7 @@ Runs anywhere JavaScript runs — Node, browsers, Bun, Cloudflare Workers, React
 <a href="https://npmjs.com/package/quantvec"><img src="https://img.shields.io/npm/v/quantvec.svg"></img><img src="https://img.shields.io/npm/dt/quantvec.svg"></img></a> [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 **Add vectors, search instantly — no training, no native build, no server.**  
-7.9–15.7× smaller than float32. WASM v128 FastScan for 5–6× faster queries.  
+7.9–15.7× smaller than float32. WASM v128 FastScan for up to ~9× faster queries.  
 Node · Browser · Bun · Cloudflare Workers · React Native.
 
 </div>
@@ -26,20 +26,20 @@ when you can't run k-means in-process or ship a trained model. TurboQuant is **d
 random rotation makes every coordinate follow a known Beta distribution, so the MSE-optimal
 scalar codebook is fully determined by `(dim, bits)` with **no data and ~zero indexing time**.
 
-| Feature            | quantvec                                                           |
-| ------------------ | ------------------------------------------------------------------ |
-| Training required  | **No** — rotation + codebook fixed by (dim, bits, seed)            |
-| Compression        | **7.9–15.7×** (true 2/3/4-bit packing)                             |
-| Query acceleration | **WASM v128 FastScan** — 5–6× faster than scalar, pure-TS fallback |
-| Runtimes           | Node · Browser · Bun · Cloudflare Workers · React Native           |
-| Metrics            | `cosine` · `dot` · `euclidean` per query                           |
-| Id types           | `number` · `string` · `bigint`                                     |
-| Dependencies       | **Zero** runtime dependencies                                      |
+| Feature            | quantvec                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Training required  | **No** — rotation + codebook fixed by (dim, bits, seed)                                 |
+| Compression        | **7.9–15.7×** (true 2/3/4-bit packing)                                                  |
+| Query acceleration | **WASM v128 FastScan** — up to ~9× faster than scalar (scales with n), pure-TS fallback |
+| Runtimes           | Node · Browser · Bun · Cloudflare Workers · React Native                                |
+| Metrics            | `cosine` · `dot` · `euclidean` per query                                                |
+| Id types           | `number` · `string` · `bigint`                                                          |
+| Dependencies       | **Zero** runtime dependencies                                                           |
 
 > **Scope:** quantvec is a _flat quantized index_ — O(n) scan over compact codes (à la FAISS
 > `IndexPQFastScan`) — with an opt-in **IVF coarse quantizer** (`ivf: { nlist }`) that probes
-> only the nearest cells for sublinear search on large corpora (**11× QPS at equal recall**
-> measured at 20k vectors; the gain grows with n).
+> only the nearest cells for sublinear search on large corpora (**64.8× QPS at equal recall**
+> measured at 200k vectors, nprobe=8/1024; the gain grows with n).
 
 A 1M × 1536-d corpus (e.g. OpenAI `text-embedding-ada-002`) is **6.1 GB as float32**. At 4 bits
 quantvec packs it into **~780 MB** (7.92×); at 2 bits, **~390 MB** (15.67×) — with **94%+
@@ -72,8 +72,8 @@ const { indices, scores } = index.search(query, 10);
 // indices: Int32Array (slot positions)  ·  scores: Float32Array (metric values)
 ```
 
-Enable the **v128 FastScan** kernel for ~5–6× faster queries (4-bit only; approximate ranking +
-exact rescore of the candidate pool):
+Enable the **v128 FastScan** kernel for faster queries (4-bit only; approximate ranking +
+exact rescore of the candidate pool; speedup grows with n — ~1.8× at 10k, ~9.3× at 100k):
 
 ```ts
 const index = new TurboQuantIndex({ dim: 1536, bits: 4, fastscan: true });
@@ -81,7 +81,7 @@ const index = new TurboQuantIndex({ dim: 1536, bits: 4, fastscan: true });
 
 For large corpora, enable the **IVF coarse quantizer** — k-means cells are trained from the
 first add (needs ≥ `nlist` vectors; ~32·nlist recommended) and queries probe only the nearest
-`nprobe` cells (sublinear scan; ~11× QPS at equal recall on clustered data):
+`nprobe` cells (sublinear scan; **64.8× QPS** at equal recall on 200k vectors, nprobe=8/1024):
 
 ```ts
 const index = new TurboQuantIndex({ dim: 1536, ivf: { nlist: 1024 } });
@@ -206,7 +206,7 @@ flowchart LR
 4. **Lloyd-Max quantize** — MSE-optimal codebook for the Beta marginal; 2, 3, or 4 bits. No training data needed.
 5. **RaBitQ scale** per vector — yields an unbiased inner-product estimate at query time.
 6. **Search** — rotates the query once, builds a per-query lookup table, then either:
-   - **v128 FastScan** (`fastscan: true`): WASM `swizzle`-based SIMD scan of blocked 16-vector tiles → u16 accumulators → rank candidate pool → exact rescore of the pool. **~5–6× faster** than the scalar path.
+   - **v128 FastScan** (`fastscan: true`): WASM `swizzle`-based SIMD scan of blocked 16-vector tiles → u16 accumulators → rank candidate pool → exact rescore of the pool. Speedup grows with n (**~1.8× at 10k → ~9.3× at 100k vectors**).
    - **Exact WASM kernel** (default): AssemblyScript f64 accumulation, resident codes in linear memory, bit-identical to the scalar oracle.
    - **Pure-TS scalar** (automatic fallback when WASM is unavailable).
 
@@ -231,10 +231,11 @@ dim=128 is a power of two → FWHT rotation + WASM kernel active.
 
 FastScan scales with corpus size. Measured on Apple Silicon:
 
-| corpus   | exact WASM | v128 FastScan | speedup  |
-| -------- | ---------- | ------------- | -------- |
-| 10k vecs | 1152 QPS   | 2055 QPS      | **1.8×** |
-| 50k vecs | ~240 QPS   | ~1350 QPS     | **5.7×** |
+| corpus    | exact WASM | v128 FastScan | speedup   |
+| --------- | ---------- | ------------- | --------- |
+| 10k vecs  | 1152 QPS   | 2055 QPS      | **1.8×**  |
+| 50k vecs  | ~240 QPS   | ~1350 QPS     | **5.7×**  |
+| 100k vecs | ~7 QPS     | ~65 QPS       | **~9.3×** |
 
 The gain grows with `n` because the SIMD scan cost scales linearly while the fixed
 rescore-pool overhead stays constant. Enable with `fastscan: true` (4-bit only; pure-TS
@@ -268,17 +269,17 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 
 ### dbpedia-OpenAI-100k (real text embeddings)
 
-5k of 100k × 1536-d OpenAI text-embedding-ada-002 vectors · 100 queries · brute-force cosine
-ground truth (`npm run bench:openai`). dim=1536 is a power of two → FWHT rotation + WASM
-kernel active.
+Full 100k × 1536-d OpenAI text-embedding-ada-002 vectors · 973 queries · ann-benchmarks
+pre-computed cosine ground truth (`npm run bench:openai`). dim=1536 is a power of two → FWHT
+rotation + WASM kernel active.
 
-| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
-| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
-| 2    | 0.800    | 0.843     | 0.847      | ~481           | ~104 | —            | 15.67×      |
-| 3    | 0.880    | 0.895     | 0.916      | ~480           | ~106 | —            | 10.52×      |
-| 4    | 0.980    | **0.943** | 0.956      | ~477           | ~106 | **~144**     | 7.92×       |
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | --- | ------------ | ----------- |
+| 2    | 0.791    | 0.824     | 0.840      | ~461           | ~7  | —            | 15.67×      |
+| 3    | 0.891    | 0.899     | 0.912      | ~462           | ~7  | —            | 10.52×      |
+| 4    | 0.953    | **0.944** | 0.952      | ~238           | ~7  | **~65**      | 7.92×       |
 
-High dimensionality and FWHT push recall above the GloVe-200 and SIFT-small results, in line
+High dimensionality and FWHT deliver strong recall against ann-benchmarks ground truth — in line
 with the TurboQuant paper's reported numbers on real OpenAI embeddings.
 Full results and JSON in [`benchmarks/`](./benchmarks/).
 
@@ -286,18 +287,18 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 
 ## Roadmap
 
-| Status | Item                                                                                                      |
-| ------ | --------------------------------------------------------------------------------------------------------- |
-| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search                    |
-| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                 |
-| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                       |
-| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)                                  |
-| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                                               |
-| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)                      |
-| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)                        |
-| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                       |
-| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`)  |
-| ✅     | **IVF / coarse-quantizer** for 10M+ corpora (k-means cells, full remove parity, ~11× QPS at equal recall) |
+| Status | Item                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search                                          |
+| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                                       |
+| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                                             |
+| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)                                                        |
+| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                                                                     |
+| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)                                            |
+| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **up to ~9.3× query**)                                        |
+| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                                             |
+| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`)                        |
+| ✅     | **IVF / coarse-quantizer** for large corpora (k-means cells, full remove parity, **64.8× QPS** at equal recall on 200k vectors) |
 
 ---
 
