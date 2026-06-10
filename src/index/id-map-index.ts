@@ -51,6 +51,11 @@ export interface IdMapSearchOptions<Id extends IdType = number> {
    * over large indexes the qdrant-style filter DSL (ergonomic layer) will be cheaper.
    */
   filter?: (id: Id) => boolean;
+  /**
+   * Override the IVF probe breadth for this query (integer in [1, nlist]). Ignored
+   * when IVF is not active. See {@link TurboQuantIndexOptions.ivf}.
+   */
+  nprobe?: number;
 }
 
 /** Result of {@link IdMapIndex.search}: external ids best-first plus aligned metric values. */
@@ -130,6 +135,11 @@ export class IdMapIndex<Id extends IdType = number> {
   /** Whether a TQ+ calibration was fit and is in effect. */
   get calibrated(): boolean {
     return this.#index.calibrated;
+  }
+
+  /** Whether an IVF coarse quantizer was trained and is in effect. */
+  get ivfActive(): boolean {
+    return this.#index.ivfActive;
   }
 
   /** Whether `id` is currently present. */
@@ -219,6 +229,7 @@ export class IdMapIndex<Id extends IdType = number> {
     validateVectorBatch(vecArr);
 
     this.#index.fitCalibrationFromBatch(vecArr);
+    this.#index.trainIvfFromBatch(vecArr);
 
     for (let j = 0; j < m; j++) {
       this.#index.addOne(vecArr[j]!);
@@ -244,6 +255,7 @@ export class IdMapIndex<Id extends IdType = number> {
     }
     const innerOpts: IndexSearchOptions = {};
     if (opts.metric !== undefined) innerOpts.metric = opts.metric;
+    if (opts.nprobe !== undefined) innerOpts.nprobe = opts.nprobe;
     if (opts.filter !== undefined) {
       const filter = opts.filter;
       const mask = new Uint8Array(this.#idForSlot.length);

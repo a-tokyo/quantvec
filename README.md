@@ -37,8 +37,9 @@ scalar codebook is fully determined by `(dim, bits)` with **no data and ~zero in
 | Dependencies       | **Zero** runtime dependencies                                      |
 
 > **Scope:** quantvec is a _flat quantized index_ — O(n) scan over compact codes (à la FAISS
-> `IndexPQFastScan`). Great recall and throughput up to ~1–10M vectors. An IVF coarse-quantizer
-> for larger corpora is on the roadmap.
+> `IndexPQFastScan`) — with an opt-in **IVF coarse quantizer** (`ivf: { nlist }`) that probes
+> only the nearest cells for sublinear search on large corpora (**11× QPS at equal recall**
+> measured at 20k vectors; the gain grows with n).
 
 A 1M × 1536-d corpus (e.g. OpenAI `text-embedding-ada-002`) is **6.1 GB as float32**. At 4 bits
 quantvec packs it into **~780 MB** (7.92×); at 2 bits, **~390 MB** (15.67×) — with **94%+
@@ -76,6 +77,16 @@ exact rescore of the candidate pool):
 
 ```ts
 const index = new TurboQuantIndex({ dim: 1536, bits: 4, fastscan: true });
+```
+
+For large corpora, enable the **IVF coarse quantizer** — k-means cells are trained from the
+first add (needs ≥ `nlist` vectors; ~32·nlist recommended) and queries probe only the nearest
+`nprobe` cells (sublinear scan; ~11× QPS at equal recall on clustered data):
+
+```ts
+const index = new TurboQuantIndex({ dim: 1536, ivf: { nlist: 1024 } });
+index.add(corpus); // first batch trains + freezes the cells
+index.search(query, 10, { nprobe: 32 }); // per-query recall/speed knob
 ```
 
 ### Stable ids: `IdMapIndex`
@@ -275,18 +286,18 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 
 ## Roadmap
 
-| Status | Item                                                                                                     |
-| ------ | -------------------------------------------------------------------------------------------------------- |
-| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search                   |
-| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                |
-| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                      |
-| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)                                 |
-| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                                              |
-| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)                     |
-| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)                       |
-| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                      |
-| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`) |
-| 📋     | IVF / coarse-quantizer for 10M+ corpora                                                                  |
+| Status | Item                                                                                                      |
+| ------ | --------------------------------------------------------------------------------------------------------- |
+| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search                    |
+| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                 |
+| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                       |
+| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)                                  |
+| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                                               |
+| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)                      |
+| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)                        |
+| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                       |
+| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`)  |
+| ✅     | **IVF / coarse-quantizer** for 10M+ corpora (k-means cells, full remove parity, ~11× QPS at equal recall) |
 
 ---
 

@@ -10,31 +10,33 @@ A growable, positional flat quantized index.
 new TurboQuantIndex(options: TurboQuantIndexOptions)
 ```
 
-| Option      | Type                               | Default    | Notes                                                                                                                                                   |
-| ----------- | ---------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dim`       | `number`                           | —          | positive multiple of 8                                                                                                                                  |
-| `bits`      | `2 \| 3 \| 4`                      | `4`        | quantizer bit-width                                                                                                                                     |
-| `metric`    | `'cosine' \| 'dot' \| 'euclidean'` | `'cosine'` | default ranking metric                                                                                                                                  |
-| `seed`      | `number`                           | `0`        | rotation RNG seed (finite; truncated to an integer)                                                                                                     |
-| `calibrate` | `boolean`                          | `false`    | opt-in TQ+ per-coordinate calibration (fit from the first ≥1000-vector add; data-dependent)                                                             |
-| `wasm`      | `boolean`                          | `true`     | use the WASM scoring kernel when available (exact; auto-falls back to the scalar scan)                                                                  |
-| `fastscan`  | `boolean`                          | `false`    | use the v128 FastScan kernel (4-bit only; approximate SIMD ranking + exact rescore; falls back to the exact kernel when `bits ≠ 4` or WASM unavailable) |
+| Option      | Type                                 | Default    | Notes                                                                                                                                                                                                                                 |
+| ----------- | ------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dim`       | `number`                             | —          | positive multiple of 8                                                                                                                                                                                                                |
+| `bits`      | `2 \| 3 \| 4`                        | `4`        | quantizer bit-width                                                                                                                                                                                                                   |
+| `metric`    | `'cosine' \| 'dot' \| 'euclidean'`   | `'cosine'` | default ranking metric                                                                                                                                                                                                                |
+| `seed`      | `number`                             | `0`        | rotation RNG seed (finite; truncated to an integer)                                                                                                                                                                                   |
+| `calibrate` | `boolean`                            | `false`    | opt-in TQ+ per-coordinate calibration (fit from the first ≥1000-vector add; data-dependent)                                                                                                                                           |
+| `wasm`      | `boolean`                            | `true`     | use the WASM scoring kernel when available (exact; auto-falls back to the scalar scan)                                                                                                                                                |
+| `fastscan`  | `boolean`                            | `false`    | use the v128 FastScan kernel (4-bit only; approximate SIMD ranking + exact rescore; falls back to the exact kernel when `bits ≠ 4` or WASM unavailable)                                                                               |
+| `ivf`       | `{ nlist: number; nprobe?: number }` | off        | opt-in IVF coarse quantizer: `nlist ∈ [2, 2^22]` k-means cells trained from the first ≥ nlist-vector add and frozen; queries probe `nprobe` cells (default ⌈nlist/8⌉). Whole-database WASM/FastScan kernels are bypassed while active |
 
 **Methods & getters**
 
-| Member                                                     | Signature                                                                     | Description                                   |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------- |
-| `add`                                                      | `(vectors: Float32Array \| number[][] \| Float32Array[]) => void`             | append a batch                                |
-| `addOne`                                                   | `(vec: Float32Array \| number[]) => void`                                     | append one                                    |
-| `search`                                                   | `(query: Float32Array, k: number, opts?: IndexSearchOptions) => SearchResult` | k nearest                                     |
-| `swapRemove`                                               | `(i: number) => void`                                                         | O(1) delete; moves the last row into slot `i` |
-| `clear`                                                    | `() => void`                                                                  | drop all vectors (keeps capacity)             |
-| `toBytes`                                                  | `() => Uint8Array`                                                            | serialize                                     |
-| `TurboQuantIndex.fromBytes`                                | `(bytes: Uint8Array) => TurboQuantIndex`                                      | deserialize (static)                          |
-| `size` / `dim` / `bits` / `metric` / `seed` / `calibrated` | getters                                                                       | live count + config + whether TQ+ is active   |
+| Member                                                                   | Signature                                                                     | Description                                      |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------ |
+| `add`                                                                    | `(vectors: Float32Array \| number[][] \| Float32Array[]) => void`             | append a batch                                   |
+| `addOne`                                                                 | `(vec: Float32Array \| number[]) => void`                                     | append one                                       |
+| `search`                                                                 | `(query: Float32Array, k: number, opts?: IndexSearchOptions) => SearchResult` | k nearest                                        |
+| `swapRemove`                                                             | `(i: number) => void`                                                         | O(1) delete; moves the last row into slot `i`    |
+| `clear`                                                                  | `() => void`                                                                  | drop all vectors (keeps capacity)                |
+| `toBytes`                                                                | `() => Uint8Array`                                                            | serialize                                        |
+| `TurboQuantIndex.fromBytes`                                              | `(bytes: Uint8Array) => TurboQuantIndex`                                      | deserialize (static)                             |
+| `size` / `dim` / `bits` / `metric` / `seed` / `calibrated` / `ivfActive` | getters                                                                       | live count + config + whether TQ+/IVF are active |
 
-`IndexSearchOptions`: `{ metric?: Distance; mask?: Uint8Array \| boolean[] }` (mask length = `size`,
-positional). `SearchResult`: `{ indices: Int32Array; scores: Float32Array }`.
+`IndexSearchOptions`: `{ metric?: Distance; mask?: Uint8Array \| boolean[]; nprobe?: number }`
+(mask length = `size`, positional; `nprobe` overrides the IVF probe breadth and is ignored when
+IVF is not active). `SearchResult`: `{ indices: Int32Array; scores: Float32Array }`.
 
 ## `IdMapIndex<Id>`
 
@@ -44,19 +46,19 @@ Stable-id layer over `TurboQuantIndex`. `Id extends number | string | bigint`, d
 new IdMapIndex<Id = number>(options: TurboQuantIndexOptions)
 ```
 
-| Member                                                     | Signature                                                                               | Description                                 |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `addWithIds`                                               | `(ids: readonly Id[], vectors: Float32Array \| number[][] \| Float32Array[]) => void`   | append with ids                             |
-| `search`                                                   | `(query: Float32Array, k: number, opts?: IdMapSearchOptions<Id>) => IdSearchResult<Id>` | k nearest, by id                            |
-| `has`                                                      | `(id: Id) => boolean`                                                                   | membership                                  |
-| `remove`                                                   | `(id: Id) => void`                                                                      | O(1) delete by id                           |
-| `ids`                                                      | `() => Id[]`                                                                            | snapshot of all ids (slot order)            |
-| `clear`                                                    | `() => void`                                                                            | empty the index                             |
-| `toBytes`                                                  | `() => Uint8Array`                                                                      | serialize                                   |
-| `IdMapIndex.fromBytes`                                     | `<Id>(bytes: Uint8Array) => IdMapIndex<Id>`                                             | deserialize (static; assert `Id`)           |
-| `size` / `dim` / `bits` / `metric` / `seed` / `calibrated` | getters                                                                                 | live count + config + whether TQ+ is active |
+| Member                                                                   | Signature                                                                               | Description                                      |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `addWithIds`                                                             | `(ids: readonly Id[], vectors: Float32Array \| number[][] \| Float32Array[]) => void`   | append with ids                                  |
+| `search`                                                                 | `(query: Float32Array, k: number, opts?: IdMapSearchOptions<Id>) => IdSearchResult<Id>` | k nearest, by id                                 |
+| `has`                                                                    | `(id: Id) => boolean`                                                                   | membership                                       |
+| `remove`                                                                 | `(id: Id) => void`                                                                      | O(1) delete by id                                |
+| `ids`                                                                    | `() => Id[]`                                                                            | snapshot of all ids (slot order)                 |
+| `clear`                                                                  | `() => void`                                                                            | empty the index                                  |
+| `toBytes`                                                                | `() => Uint8Array`                                                                      | serialize                                        |
+| `IdMapIndex.fromBytes`                                                   | `<Id>(bytes: Uint8Array) => IdMapIndex<Id>`                                             | deserialize (static; assert `Id`)                |
+| `size` / `dim` / `bits` / `metric` / `seed` / `calibrated` / `ivfActive` | getters                                                                                 | live count + config + whether TQ+/IVF are active |
 
-`IdMapSearchOptions<Id>`: `{ metric?: Distance; filter?: (id: Id) => boolean }`.
+`IdMapSearchOptions<Id>`: `{ metric?: Distance; filter?: (id: Id) => boolean; nprobe?: number }`.
 `IdSearchResult<Id>`: `{ ids: Id[]; scores: Float32Array }`.
 
 ## `quantvec/node`

@@ -33,6 +33,12 @@ export interface CollectionConfig {
   seed?: number;
   /** Enable TQ+ calibration (default false; data-dependent — see TurboQuantIndex). */
   calibrate?: boolean;
+  /**
+   * Enable IVF coarse-quantized search (default off): `nlist` cells trained from the
+   * first upsert of ≥ nlist points and frozen; queries probe `nprobe` cells (default
+   * ⌈nlist/8⌉, overridable per search). See TurboQuantIndex for the full contract.
+   */
+  ivf?: { nlist: number; nprobe?: number };
 }
 
 /** Per-search parameters. */
@@ -43,6 +49,8 @@ export interface SearchParams<Id extends IdType = number | string> {
   filter?: Filter<Id>;
   /** Include each hit's payload (default true). */
   withPayload?: boolean;
+  /** Override the IVF probe breadth for this query (ignored when IVF is not active). */
+  nprobe?: number;
 }
 
 // ── Filter DSL (qdrant-inspired) ───────────────────────────────────────────────

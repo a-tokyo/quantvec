@@ -11,14 +11,17 @@
 //
 // Layout (all multi-byte fields little-endian; header = 24 bytes):
 //   [0..4)   magic  "QVEC" (0x51 0x56 0x45 0x43)
-//   [4]      version u8  (= 1)
+//   [4]      version u8  (= 2)
 //   [5]      kind    u8  (0 = positional, 1 = idmap)
 //   [6]      metric  u8  (0 = dot, 1 = cosine, 2 = euclidean)
 //   [7]      bits    u8  (2 | 3 | 4)
 //   [8..12)  dim     u32
 //   [12..16) n       u32
 //   [16..24) seed    f64
-//   [24..]   codes   (n·dim bytes) · scales (n·f32) · norms (n·f32)
+//   [24..]   codes   (⌈n·dim·bits/8⌉ bytes, bit-packed) · scales (n·f32) · norms (n·f32)
+//   [cali]   flag u8 ∈ {0,1} ; 1 → shift (dim·f32) + scale (dim·f32)
+//   [ivf]    flag u8 ∈ {0,1} ; 1 → nlist u32 + nprobe u32
+//                                  + centroids (nlist·dim·f32) + listForSlot (n·u32)
 //   [idmap]  ids: n × { tag u8 ; 0→f64 | 1→(u32 len + utf8) | 2→(u32 len + utf8 of BigInt) }
 
 import type { Calibration } from '../core/calibrate';
@@ -42,7 +45,8 @@ export class DeserializeError extends Error {
     | 'BAD_SEED'
     | 'BAD_LENGTH'
     | 'BAD_ID'
-    | 'BAD_CALIBRATION';
+    | 'BAD_CALIBRATION'
+    | 'BAD_IVF';
   constructor(code: DeserializeError['code'], message: string) {
     super(message);
     this.name = 'DeserializeError';
@@ -70,6 +74,20 @@ export interface IndexPayload {
   norms: Float32Array;
   /** Optional frozen TQ+ calibration (shift/scale, length dim each); absent if un-calibrated. */
   calibration?: Calibration;
+  /** Optional frozen IVF coarse-quantizer state; absent while the index is flat. */
+  ivf?: IvfPayload;
+}
+
+/** Serialized IVF coarse-quantizer state (postings are rebuilt from `listForSlot`). */
+export interface IvfPayload {
+  /** Number of coarse cells; integer in [2, 2^22]. */
+  nlist: number;
+  /** Default probe breadth; integer in [1, nlist]. */
+  nprobe: number;
+  /** Row-major nlist·dim cell centroids. */
+  centroids: Float32Array;
+  /** Owning cell per live slot, length n (each entry < nlist). */
+  listForSlot: Int32Array;
 }
 
 /** Serialize input for the positional index. */
@@ -102,8 +120,10 @@ export interface DeserializedIdMap extends IndexPayload {
 export type DeserializedIndex = DeserializedPositional | DeserializedIdMap;
 
 const MAGIC = 0x51564543; // "QVEC" read big-endian as a u32 (matches the byte order written below)
-const VERSION = 1;
+const VERSION = 2;
 const HEADER_BYTES = 24;
+/** Same bound the index enforces at construction (see ../index/turboquant-index). */
+const MAX_NLIST = 1 << 22;
 const FLOAT_BYTES = 4; // width of an f32 scale/norm field
 const U32_BYTES = 4; // width of the u32 length prefix on a string/bigint id
 
@@ -144,7 +164,11 @@ export function serializeIndex(payload: SerializableIndex): Uint8Array {
   // Calibration section: 1 presence byte, then (if present) shift[dim] + scale[dim] f32.
   const calibration = payload.calibration;
   const caliBytes = 1 + (calibration ? 2 * dim * FLOAT_BYTES : 0);
-  const bodyBytes = packedCodes.length + (scales.length + norms.length) * FLOAT_BYTES + caliBytes;
+  // IVF section: 1 presence byte, then (if present) nlist + nprobe u32, centroids, listForSlot.
+  const ivf = payload.ivf;
+  const ivfBytes = 1 + (ivf ? 2 * U32_BYTES + ivf.nlist * dim * FLOAT_BYTES + n * U32_BYTES : 0);
+  const bodyBytes =
+    packedCodes.length + (scales.length + norms.length) * FLOAT_BYTES + caliBytes + ivfBytes;
 
   // For the id-keyed index, pre-encode the ids so we can size the buffer exactly.
   const enc = new TextEncoder();
@@ -188,6 +212,27 @@ export function serializeIndex(payload: SerializableIndex): Uint8Array {
     for (let i = 0; i < dim; i++) {
       dv.setFloat32(off, calibration.scale[i]!, true);
       off += FLOAT_BYTES;
+    }
+  } else {
+    dv.setUint8(off, 0);
+    off += 1;
+  }
+
+  // ── IVF (presence byte, then nlist/nprobe + centroids + listForSlot if present) ──
+  if (ivf) {
+    dv.setUint8(off, 1);
+    off += 1;
+    dv.setUint32(off, ivf.nlist, true);
+    off += U32_BYTES;
+    dv.setUint32(off, ivf.nprobe, true);
+    off += U32_BYTES;
+    for (let i = 0; i < ivf.centroids.length; i++) {
+      dv.setFloat32(off, ivf.centroids[i]!, true);
+      off += FLOAT_BYTES;
+    }
+    for (let i = 0; i < ivf.listForSlot.length; i++) {
+      dv.setUint32(off, ivf.listForSlot[i]!, true);
+      off += U32_BYTES;
     }
   } else {
     dv.setUint8(off, 0);
@@ -337,8 +382,61 @@ export function deserializeIndex(bytes: Uint8Array): DeserializedIndex {
     throw new DeserializeError('BAD_LENGTH', `invalid calibration flag ${caliFlag}`);
   }
 
+  // ── IVF (presence byte, then nlist/nprobe + centroids + listForSlot if present) ──
+  if (off + 1 > bytes.length) {
+    throw new DeserializeError('BAD_LENGTH', 'truncated before ivf flag');
+  }
+  const ivfFlag = dv.getUint8(off);
+  off += 1;
+  let ivf: IvfPayload | undefined;
+  if (ivfFlag === 1) {
+    if (off + 2 * U32_BYTES > bytes.length) {
+      throw new DeserializeError('BAD_IVF', 'truncated before ivf nlist/nprobe');
+    }
+    const nlist = dv.getUint32(off, true);
+    off += U32_BYTES;
+    const nprobe = dv.getUint32(off, true);
+    off += U32_BYTES;
+    if (nlist < 2 || nlist > MAX_NLIST) {
+      throw new DeserializeError('BAD_IVF', `nlist must be in [2, 2^22], got ${nlist}`);
+    }
+    if (nprobe < 1 || nprobe > nlist) {
+      throw new DeserializeError('BAD_IVF', `nprobe must be in [1, nlist=${nlist}], got ${nprobe}`);
+    }
+    // Bounds-check the whole section BEFORE allocating anything sized by nlist/n.
+    const ivfBody = nlist * dim * FLOAT_BYTES + n * U32_BYTES;
+    if (off + ivfBody > bytes.length) {
+      throw new DeserializeError('BAD_IVF', 'ivf section exceeds buffer');
+    }
+    const centroids = new Float32Array(nlist * dim);
+    for (let i = 0; i < centroids.length; i++) {
+      const x = dv.getFloat32(off, true);
+      if (!Number.isFinite(x)) {
+        throw new DeserializeError('BAD_IVF', `centroid coordinate ${i} is not finite`);
+      }
+      centroids[i] = x;
+      off += FLOAT_BYTES;
+    }
+    const listForSlot = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      const l = dv.getUint32(off, true);
+      if (l >= nlist) {
+        throw new DeserializeError(
+          'BAD_IVF',
+          `listForSlot[${i}] = ${l} out of range [0, ${nlist})`,
+        );
+      }
+      listForSlot[i] = l;
+      off += U32_BYTES;
+    }
+    ivf = { nlist, nprobe, centroids, listForSlot };
+  } else if (ivfFlag !== 0) {
+    throw new DeserializeError('BAD_IVF', `invalid ivf flag ${ivfFlag}`);
+  }
+
   const base: IndexPayload = { metric, bits: bits as Bits, dim, n, seed, codes, scales, norms };
   if (calibration !== undefined) base.calibration = calibration;
+  if (ivf !== undefined) base.ivf = ivf;
   if (kindByte === 0) {
     if (off !== bytes.length) {
       throw new DeserializeError('BAD_LENGTH', `${bytes.length - off} trailing bytes after body`);
