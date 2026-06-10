@@ -40,6 +40,10 @@ scalar codebook is fully determined by `(dim, bits)` with **no data and ~zero in
 > `IndexPQFastScan`). Great recall and throughput up to ~1–10M vectors. An IVF coarse-quantizer
 > for larger corpora is on the roadmap.
 
+A 1M × 1536-d corpus (e.g. OpenAI `text-embedding-ada-002`) is **6.1 GB as float32**. At 4 bits
+quantvec packs it into **~780 MB** (7.92×); at 2 bits, **~390 MB** (15.67×) — with **94%+
+recall@10** measured on real OpenAI embeddings (see [Benchmarks](#benchmarks)).
+
 ---
 
 ## Install
@@ -283,8 +287,6 @@ Full results and JSON in [`benchmarks/`](./benchmarks/).
 | ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                      |
 | ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`) |
 | 📋     | IVF / coarse-quantizer for 10M+ corpora                                                                  |
-
-Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md).
 
 ---
 

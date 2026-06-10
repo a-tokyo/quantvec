@@ -1,8 +1,7 @@
 # Roadmap
 
 quantvec is built in waves with a doer / verifier / devil's-advocate subagent workflow; each wave
-merges only when the gate is green (typecheck, lint, tests, coverage) and reviewed. Live status lives
-in [`docs/worklog/PROGRESS.md`](https://github.com/a-tokyo/quantvec/blob/main/docs/worklog/PROGRESS.md).
+merges only when the gate is green (typecheck, lint, tests, coverage) and reviewed.
 
 ## Shipped
 
@@ -38,14 +37,15 @@ in [`docs/worklog/PROGRESS.md`](https://github.com/a-tokyo/quantvec/blob/main/do
 - **Ergonomic `createCollection`** — qdrant-style `Collection<P>` with typed payloads, `upsert`,
   `delete`, `get`, and a `must`/`should`/`must_not` filter DSL compiled to slot masks. Zero overhead:
   thin wrapper over `IdMapIndex`.
-- **Real-dataset benchmarks** — SIFT-small (10k × 128-d, L2, dataset ground truth) and GloVe-200
-  (100k of 1.18M × 200-d, cosine, brute-force sub-sample ground truth). Results in
-  `benchmarks/results/`. GloVe-200 exercises the dense Householder rotation (dim=200, non-power-of-two).
+- **Real-dataset benchmarks** — SIFT-small (10k × 128-d, L2, dataset ground truth), GloVe-200
+  (100k of 1.18M × 200-d, cosine, brute-force sub-sample ground truth), and dbpedia-OpenAI-100k
+  (1536-d OpenAI `text-embedding-ada-002`, cosine, brute-force sub-sample ground truth). Results in
+  `benchmarks/results/`. GloVe-200 exercises the dense Householder rotation (dim=200,
+  non-power-of-two); dbpedia-OpenAI-100k exercises the FWHT path (dim=1536, power-of-two).
 
 ## Planned
 
 - **IVF / coarse quantizer** for sublinear search on 10M+ corpora.
-- **v0.1.0 release** to npm after a full panel + security review.
 
 ## Non-goals (for now)
 
