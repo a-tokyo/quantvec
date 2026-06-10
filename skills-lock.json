@@ -19,6 +19,12 @@
       "skillPath": "skills/executing-plans/SKILL.md",
       "computedHash": "b41c919caf1bb07fbacb0e29899ac513f9eb11cd4dd695975ad352c2c03cc4d7"
     },
+    "subagent-driven-development": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/subagent-driven-development/SKILL.md",
+      "computedHash": "b38be2f3a092d758127f6d47e77c2493885aebf38aae359e4c786df2c343b837"
+    },
     "handoff": {
       "source": "mattpocock/skills",
       "sourceType": "github",
