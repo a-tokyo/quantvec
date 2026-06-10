@@ -18,7 +18,7 @@ export default defineConfig({
       provider: 'v8',
       all: true,
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/node.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts'],
       thresholds: {
         lines: 90,
         functions: 90,
