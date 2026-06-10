@@ -28,7 +28,7 @@ import { scoreMetric } from '../core/metrics';
 import type { Distance, QueryNorms } from '../core/metrics';
 import { createRotation } from '../core/rotation';
 import type { Rotation } from '../core/rotation';
-import { buildQueryLut, searchFlat } from '../core/search';
+import { buildQueryLut, searchFlat, SearchError } from '../core/search';
 import type { EncodedDb, SearchOptions, SearchResult } from '../core/search';
 import { TopK } from '../core/topk';
 import { WasmKernel } from '../wasm/kernel';
@@ -365,8 +365,10 @@ export class TurboQuantIndex {
    * @throws {IndexError} `'INVALID_LENGTH'` if a flat buffer is not a multiple of
    *   dim, or an individual vector's length differs from dim; `'INVALID_VECTOR'` if
    *   an element is not array-like.
-   * @throws {EncodeError} (re-thrown) on a non-finite or zero vector. Note: a batch is
-   *   appended in order, so an encode error mid-batch leaves the preceding vectors added.
+   * @throws {EncodeError} (re-thrown) on a non-finite or zero vector, or
+   *   (`'DEGENERATE'`, calibrated indexes only) a vector so far outside the calibrated
+   *   distribution that it cannot be encoded faithfully. Note: a batch is appended in
+   *   order, so an encode error mid-batch leaves the preceding vectors added.
    */
   add(vectors: Float32Array | number[][] | Float32Array[]): void {
     const vecs = this.#toVectorArray(vectors);
@@ -429,6 +431,13 @@ export class TurboQuantIndex {
   search(query: Float32Array, k: number, opts: IndexSearchOptions = {}): SearchResult {
     if (this.#n === 0) {
       throw new IndexError('EMPTY', 'cannot search an empty index');
+    }
+    // Validated here, before path selection: searchFlat re-checks this on the scalar
+    // and exact-WASM paths, but the FastScan path reads mask[v] directly — without
+    // this check a wrong-length mask would silently scan nothing there instead of
+    // throwing the same typed error as the other paths.
+    if (opts.mask !== undefined && opts.mask.length !== this.#n) {
+      throw new SearchError('INVALID_MASK', `mask length ${opts.mask.length} != n ${this.#n}`);
     }
     const metric = opts.metric ?? this.#metric;
     const searchOpts: SearchOptions =

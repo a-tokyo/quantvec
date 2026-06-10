@@ -48,7 +48,13 @@ import type { Rotation } from './rotation';
 
 /** Discriminated, code-tagged error for the encode module. */
 export class EncodeError extends Error {
-  readonly code: 'INVALID_DIM' | 'INVALID_BITS' | 'INVALID_LENGTH' | 'ZERO_VECTOR' | 'MISMATCH';
+  readonly code:
+    | 'INVALID_DIM'
+    | 'INVALID_BITS'
+    | 'INVALID_LENGTH'
+    | 'ZERO_VECTOR'
+    | 'MISMATCH'
+    | 'DEGENERATE';
   constructor(code: EncodeError['code'], message: string) {
     super(message);
     this.name = 'EncodeError';
@@ -150,8 +156,9 @@ export function validateVectorBatch(vecs: readonly Float32Array[]): void {
  * typed `ZERO_VECTOR` error; callers that want to keep zero rows should filter or
  * substitute them upstream (documented choice — we never emit a NaN scale).
  *
- * @throws {EncodeError} on dimension/bits/length mismatch, non-finite input, or a
- *   zero/degenerate vector.
+ * @throws {EncodeError} on dimension/bits/length mismatch, non-finite input, a zero
+ *   vector, or (`'DEGENERATE'`) a vector so far outside the calibrated distribution
+ *   that its reconstruction projection is non-positive.
  */
 export function encodeVector(vec: Float32Array, opts: EncodeOptions): EncodedVector {
   const { dim, bits, rotation, codebook } = opts;
@@ -235,16 +242,30 @@ export function encodeVector(vec: Float32Array, opts: EncodeOptions): EncodedVec
       codes[i] = code;
       inner += rotated[i]! * (centroids[code]! / scaleCal[i]! - shift[i]!);
     }
+    // The sign-match argument below holds only without calibration: here the code is
+    // chosen from the shifted/scaled coordinate while `inner` accumulates against the
+    // de-calibrated reconstruction, so a vector far outside the calibrated distribution
+    // (e.g. anti-correlated with a tight calibration cluster) can drive inner ≤ 0 —
+    // which would flip the RaBitQ scale's sign and silently anti-rank the vector
+    // forever. Reject it instead (`!(inner > 0)` also catches NaN).
+    if (!(inner > 0)) {
+      throw new EncodeError(
+        'DEGENERATE',
+        `vector lies too far outside the calibrated distribution to encode ` +
+          `(reconstruction projection ${inner} ≤ 0); rebuild the index without ` +
+          `\`calibrate\` to store it`,
+      );
+    }
   }
 
   // ── RaBitQ scale = norm / ⟨o_rot, c⟩ ─────────────────────────────────────
   // `inner` is the projection of the unit direction o_rot onto its own
-  // reconstruction c. The codebook is symmetric with monotonically increasing
-  // centroids and its central decision boundary at 0, so quantizeCoord(x) returns
-  // a centroid with the same sign as x — every term o_rot[i]·c[i] ≥ 0, hence
-  // inner > 0 for a unit direction (empirically inner ∈ [0.55, 1.34]). No clamp
-  // branch is needed, and none would be reachable or testable (greenfield: no
-  // dead guards).
+  // reconstruction c. Without calibration the codebook is symmetric with
+  // monotonically increasing centroids and its central decision boundary at 0, so
+  // quantizeCoord(x) returns a centroid with the same sign as x — every term
+  // o_rot[i]·c[i] ≥ 0, hence inner > 0 for a unit direction (empirically
+  // inner ∈ [0.55, 1.34]) and no guard is reachable on that path. The calibrated
+  // path is guarded above.
   const scale = norm / inner;
 
   return { codes, scale, norm };

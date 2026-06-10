@@ -506,6 +506,41 @@ describe('TurboQuantIndex — FastScan path (v128 blocked-nibble + exact rescore
     expect(res.indices[0]).not.toBe(7);
   });
 
+  it('rejects a wrong-length mask on the FastScan path (same error as the exact paths)', () => {
+    const data = gaussianVecs(40, 45);
+    const fast = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: true });
+    const scalar = new TurboQuantIndex({ dim: FDIM, bits: 4, wasm: false });
+    fast.add(data);
+    scalar.add(data);
+    const q = gaussianVecs(1, 46)[0]!;
+    const shortMask = new Uint8Array(10).fill(1);
+    for (const idx of [fast, scalar]) {
+      let err: unknown;
+      try {
+        idx.search(q, 5, { mask: shortMask });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(SearchError);
+      expect((err as SearchError).code).toBe('INVALID_MASK');
+    }
+  });
+
+  it('a mask that excludes every vector yields an empty result on both paths', () => {
+    const data = gaussianVecs(40, 47);
+    const fast = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: true });
+    const scalar = new TurboQuantIndex({ dim: FDIM, bits: 4, wasm: false });
+    fast.add(data);
+    scalar.add(data);
+    const q = gaussianVecs(1, 48)[0]!;
+    const none = new Uint8Array(40); // all zeros
+    for (const idx of [fast, scalar]) {
+      const res = idx.search(q, 5, { mask: none });
+      expect(res.indices.length).toBe(0);
+      expect(res.scores.length).toBe(0);
+    }
+  });
+
   it('re-uploads blocked codes after mutation', () => {
     const idx = new TurboQuantIndex({ dim: FDIM, bits: 4, fastscan: true });
     idx.add(gaussianVecs(50, 50));

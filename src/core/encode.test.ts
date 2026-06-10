@@ -3,7 +3,7 @@ import { encodeVector, scoreCodes, createEncodeScratch, EncodeError } from './en
 import { createDenseRotation } from './rotation';
 import { getCodebook } from './codebook';
 import { createRng } from './rng';
-import { identityCalibration } from './calibrate';
+import { fitCalibration, identityCalibration } from './calibrate';
 import type { Bits } from './codebook';
 
 /** Exact float dot product. */
@@ -362,5 +362,48 @@ describe('encodeVector — TQ+ calibration', () => {
     expect(Number.isFinite(enc.scale)).toBe(true);
     expect(enc.scale).toBeGreaterThan(0);
     expect(enc.codes.length).toBe(dim);
+  });
+
+  it('rejects (DEGENERATE) a vector anti-correlated with the calibrated distribution', () => {
+    // Calibrate on a tight cluster of unit directions around u, then encode -u: the
+    // per-coordinate shifts recenter the cluster, so -u's de-calibrated reconstruction
+    // points back toward u and the projection ⟨o_rot, r⟩ goes negative. Un-guarded,
+    // this flipped the RaBitQ scale's sign and silently anti-ranked the vector.
+    const d = 16;
+    const rot = createDenseRotation(d, 7);
+    const cb = getCodebook(d, 4);
+    const rng = createRng(42);
+    const u = new Float32Array(d).fill(1 / Math.sqrt(d));
+
+    const m = 256;
+    const rotatedBatch = new Float32Array(m * d);
+    const tmp = new Float32Array(d);
+    for (let j = 0; j < m; j++) {
+      const w = new Float32Array(d);
+      let n2 = 0;
+      for (let i = 0; i < d; i++) {
+        w[i] = u[i]! + rng.nextGaussian() * 0.01;
+        n2 += w[i]! * w[i]!;
+      }
+      const inv = 1 / Math.sqrt(n2);
+      for (let i = 0; i < d; i++) w[i] = w[i]! * inv;
+      rot.apply(w, tmp);
+      rotatedBatch.set(tmp, j * d);
+    }
+    const calibration = fitCalibration(rotatedBatch, m, d);
+
+    const minusU = Float32Array.from(u, (x) => -x);
+    let err: unknown;
+    try {
+      encodeVector(minusU, { dim: d, bits: 4, rotation: rot, codebook: cb, calibration });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(EncodeError);
+    expect((err as EncodeError).code).toBe('DEGENERATE');
+
+    // The same vector encodes fine without calibration.
+    const plain = encodeVector(minusU, { dim: d, bits: 4, rotation: rot, codebook: cb });
+    expect(plain.scale).toBeGreaterThan(0);
   });
 });

@@ -110,7 +110,7 @@ try {
 | `IndexError`       | `INVALID_DIM`, `INVALID_BITS`, `INVALID_SEED`, `INVALID_VECTOR`, `INVALID_LENGTH`, `INVALID_INDEX`, `EMPTY`, `WRONG_KIND` |
 | `IdMapError`       | `DUPLICATE_ID`, `UNKNOWN_ID`, `COUNT_MISMATCH`, `INVALID_ID_TYPE`, `INVALID_VECTOR`, `EMPTY`, `WRONG_KIND`                |
 | `DeserializeError` | `BAD_MAGIC`, `BAD_VERSION`, `BAD_KIND`, `BAD_DIM`, `BAD_SEED`, `BAD_LENGTH`, `BAD_ID`, `TOO_SHORT`                        |
-| `EncodeError`      | `ZERO_VECTOR`, `INVALID_LENGTH`                                                                                           |
+| `EncodeError`      | `ZERO_VECTOR`, `INVALID_LENGTH`, `DEGENERATE`                                                                             |
 | `SearchError`      | `INVALID_K`, `ZERO_QUERY`, `INVALID_MASK`                                                                                 |
 
 ## Calibration (TQ+)
@@ -130,6 +130,11 @@ can lift recall on real embeddings (the paper's regime) but is neutral-to-slight
 well-conditioned data where the random rotation already yields near-canonical coordinates — so it is
 off by default. Validate a recall gain on your own data before enabling it. It costs only two
 `dim`-length vectors in the serialized index.
+
+Because the calibration is frozen from the first batch, a later vector that lies far outside that
+distribution (e.g. anti-correlated with a tight calibration cluster) may not be encodable faithfully;
+`add` rejects it with `EncodeError` code `DEGENERATE`. If your data drifts that far, rebuild the index
+without `calibrate`.
 
 ## Collections (payloads + filters)
 

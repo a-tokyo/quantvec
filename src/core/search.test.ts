@@ -307,6 +307,17 @@ describe('mask / allowlist', () => {
 
     expect(Array.from(masked.indices)).toEqual(mappedExpected);
   });
+
+  it('a mask that excludes every vector yields an empty result', () => {
+    const dim = 64;
+    const n = 20;
+    const rng = createRng(987);
+    const vectors = randomVectors(n, dim, rng);
+    const db = buildDb(vectors, dim, 4);
+    const res = searchFlat(db, vectors[0]!, 5, { metric: 'dot', mask: new Uint8Array(n) });
+    expect(res.indices.length).toBe(0);
+    expect(res.scores.length).toBe(0);
+  });
 });
 
 // ── validation: k>n, k=1, zero query, bad lengths ───────────────────────────────

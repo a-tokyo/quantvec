@@ -75,6 +75,14 @@ describe('Collection — filtering', () => {
     expect(hits.map((h) => h.id).sort()).toEqual([2, 3]);
   });
 
+  it('returns [] when the filter matches no point', () => {
+    const hits = docs().search(V[0]!, {
+      limit: 4,
+      filter: { must: [{ key: 'tag', match: { value: 'nonexistent' } }] },
+    });
+    expect(hits).toEqual([]);
+  });
+
   it('supports hasId and must_not', () => {
     const hits = docs().search(V[0]!, {
       limit: 4,
