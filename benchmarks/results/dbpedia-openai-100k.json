@@ -1,0 +1,41 @@
+{
+  "dataset": "dbpedia-openai-100k-angular",
+  "source": "https://storage.googleapis.com/ann-datasets/ann-benchmarks/ (dbpedia-entities-openai-1M, ada-002)",
+  "nBase": 5000,
+  "totalTrain": 100000,
+  "dim": 1536,
+  "nQuery": 100,
+  "metric": "cosine",
+  "note": "Ground truth from the 100,000-vector corpus; recall computed against in-slice neighbors only when sub-sampled.",
+  "generatedAt": "2026-06-10T07:53:41.353Z",
+  "rows": [
+    {
+      "bits": 2,
+      "recall1": 0.8,
+      "recall10": 0.843,
+      "recall100": 0.8474,
+      "encodeVecPerSec": 480.897518274256,
+      "qps": 103.85353743322882,
+      "compressionVsF32": 15.673269473603654
+    },
+    {
+      "bits": 3,
+      "recall1": 0.88,
+      "recall10": 0.895,
+      "recall100": 0.9157000000000006,
+      "encodeVecPerSec": 479.63828174909565,
+      "qps": 106.45863706470477,
+      "compressionVsF32": 10.520457872792186
+    },
+    {
+      "bits": 4,
+      "recall1": 0.98,
+      "recall10": 0.943,
+      "recall100": 0.9555000000000001,
+      "encodeVecPerSec": 476.69794194278467,
+      "qps": 106.19976999784815,
+      "compressionVsF32": 7.917474758538927,
+      "fastScanQps": 144.23479116244621
+    }
+  ]
+}

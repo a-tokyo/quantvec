@@ -73,6 +73,7 @@
     "bench:flat": "npx tsx benchmarks/flat.ts",
     "bench:real": "node benchmarks/download-siftsmall.mjs && npx tsx benchmarks/real.ts",
     "bench:glove": "node benchmarks/download-glove.mjs && npx tsx benchmarks/glove.ts",
+    "bench:openai": "node benchmarks/download-openai.mjs && npx tsx benchmarks/openai.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

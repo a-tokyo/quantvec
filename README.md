@@ -251,22 +251,38 @@ dim=200 is not a power of two → exercises the **dense Householder** rotation p
 Real embedding structure consistently lifts recall above the synthetic isotropic floor.
 Full results and JSON in [`benchmarks/`](./benchmarks/).
 
+### dbpedia-OpenAI-100k (real text embeddings)
+
+5k of 100k × 1536-d OpenAI text-embedding-ada-002 vectors · 100 queries · brute-force cosine
+ground truth (`npm run bench:openai`). dim=1536 is a power of two → FWHT rotation + WASM
+kernel active.
+
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
+| 2    | 0.800    | 0.843     | 0.847      | ~481           | ~104 | —            | 15.67×      |
+| 3    | 0.880    | 0.895     | 0.916      | ~480           | ~106 | —            | 10.52×      |
+| 4    | 0.980    | **0.943** | 0.956      | ~477           | ~106 | **~144**     | 7.92×       |
+
+High dimensionality and FWHT push recall above the GloVe-200 and SIFT-small results, in line
+with the TurboQuant paper's reported numbers on real OpenAI embeddings.
+Full results and JSON in [`benchmarks/`](./benchmarks/).
+
 ---
 
 ## Roadmap
 
-| Status | Item                                                                                   |
-| ------ | -------------------------------------------------------------------------------------- |
-| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search |
-| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers              |
-| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                    |
-| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)               |
-| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                            |
-| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)   |
-| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)     |
-| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                    |
-| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 (results in `benchmarks/results/`)     |
-| 📋     | IVF / coarse-quantizer for 10M+ corpora                                                |
+| Status | Item                                                                                                     |
+| ------ | -------------------------------------------------------------------------------------------------------- |
+| ✅     | Core math: rotation, Beta/Lloyd-Max codebooks, encode pipeline, flat nibble-LUT search                   |
+| ✅     | `TurboQuantIndex`, `IdMapIndex`, versioned serialization, Node fs helpers                                |
+| ✅     | True 2/3/4-bit **bit-packed serialization** (7.9–15.7× compression)                                      |
+| ✅     | **FWHT rotation** for power-of-two dims (O(d·log d), ~25× faster encode)                                 |
+| ✅     | **TQ+ per-coordinate calibration** (opt-in; data-dependent)                                              |
+| ✅     | **Exact WASM scoring kernel** (AssemblyScript, bit-identical to scalar, ~1.3× query)                     |
+| ✅     | **v128 FastScan kernel** (blocked-nibble swizzle + exact rescore, **~5.7× query**)                       |
+| ✅     | **Ergonomic `createCollection`** with typed payloads and filter DSL                                      |
+| ✅     | Real-dataset benchmarks: SIFT-small + GloVe-200 + dbpedia-OpenAI-100k (results in `benchmarks/results/`) |
+| 📋     | IVF / coarse-quantizer for 10M+ corpora                                                                  |
 
 Tracked in [`docs/worklog/PROGRESS.md`](./docs/worklog/PROGRESS.md).
 

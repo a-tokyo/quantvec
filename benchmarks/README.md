@@ -1,7 +1,8 @@
 # quantvec benchmarks
 
-Three harnesses: a **synthetic** one (`flat.ts`, no download), **SIFT-small** (`real.ts`,
-10k vectors, 5 MB download), and **GloVe-200** (`glove.ts`, 100k–1.18M vectors, 426 MB download).
+Four harnesses: a **synthetic** one (`flat.ts`, no download), **SIFT-small** (`real.ts`,
+10k vectors, 5 MB download), **GloVe-200** (`glove.ts`, 100k–1.18M vectors, 426 MB download),
+and **dbpedia-OpenAI-100k** (`openai.ts`, 5k–100k × 1536-d vectors, 1.18 GB download).
 
 ## Real dataset (SIFT-small)
 
@@ -92,6 +93,35 @@ Results (`N=100000, NQ=1000`, brute-force cosine ground truth within the sub-sam
 Encode throughput is lower than SIFT-small because dim=200 uses the dense Householder
 rotation (O(d²) per vector); SIFT-small at dim=128 uses the fast FWHT (O(d·log d)).
 Full results: [`results/glove-200.json`](./results/glove-200.json).
+
+## Real dataset (dbpedia-OpenAI-100k)
+
+```bash
+npm run bench:openai   # downloads HDF5 (~1.18 GB) then runs
+# or step-by-step:
+node benchmarks/download-openai.mjs
+N=5000 NQ=100 npx tsx benchmarks/openai.ts
+```
+
+dbpedia-OpenAI-100k ([ann-benchmarks](https://ann-benchmarks.com) format, mirrored on GCS):
+100k × 1536-d OpenAI text-embedding-ada-002 vectors, cosine metric. dim=1536 is a power of
+two → exercises the FWHT rotation + WASM kernel path (the same regime as OpenAI/Ada,
+BERT-large, and other modern embedding models).
+
+Env knobs: `N` (base vectors to use, default = full corpus), `NQ` (queries, default
+`min(1000, totalTest)`). When `N` is less than the full corpus, ground truth is computed
+by brute-force cosine within the sub-sample (the pre-computed ann-benchmarks neighbors
+reference the full 100k corpus and would yield misleadingly low recall on a sub-sample).
+
+Results (`N=5000, NQ=100`, brute-force cosine ground truth within the sub-sample):
+
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
+| 2    | 0.800    | 0.843     | 0.847      | ~481           | ~104 | —            | 15.67×      |
+| 3    | 0.880    | 0.895     | 0.916      | ~480           | ~106 | —            | 10.52×      |
+| 4    | 0.980    | 0.943     | 0.956      | ~477           | ~106 | **~144**     | 7.92×       |
+
+Full results: [`results/dbpedia-openai-100k.json`](./results/dbpedia-openai-100k.json).
 
 ## What is measured
 

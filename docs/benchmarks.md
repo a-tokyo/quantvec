@@ -1,6 +1,7 @@
 # Benchmarks
 
-Three harnesses in `benchmarks/`: synthetic (no download), SIFT-small (~5 MB), and GloVe-200 (~918 MB).
+Four harnesses in `benchmarks/`: synthetic (no download), SIFT-small (~5 MB), GloVe-200 (~918 MB),
+and dbpedia-OpenAI-100k (~1.18 GB).
 
 ## SIFT-small (real dataset)
 
@@ -26,6 +27,22 @@ ground truth within the sub-sample. dim=200 is **not** a power of two → dense 
 
 Encode throughput is lower than SIFT-small because dim=200 uses the O(d²) dense rotation; SIFT-small
 uses the O(d·log d) FWHT.
+
+## dbpedia-OpenAI-100k (real text embeddings, 1536-d)
+
+`npm run bench:openai` — 5k of 100k × 1536-d OpenAI text-embedding-ada-002 vectors, 100 queries,
+brute-force cosine ground truth within the sub-sample. dim=1536 is a power of two → FWHT rotation +
+WASM kernel active:
+
+| bits | recall@1 | recall@10 | recall@100 | encode (vec/s) | QPS  | fastScan QPS | compression |
+| ---- | -------- | --------- | ---------- | -------------- | ---- | ------------ | ----------- |
+| 2    | 0.800    | 0.843     | 0.847      | ~481           | ~104 | —            | 15.67×      |
+| 3    | 0.880    | 0.895     | 0.916      | ~480           | ~106 | —            | 10.52×      |
+| 4    | 0.980    | 0.943     | 0.956      | ~477           | ~106 | **~144**     | 7.92×       |
+
+High dimensionality and the power-of-two FWHT path push recall well above the GloVe-200 and
+SIFT-small results, consistent with the TurboQuant paper's reported numbers on real OpenAI
+embeddings.
 
 ## FastScan speedup
 
