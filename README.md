@@ -9,7 +9,7 @@ A clean-room implementation of Google Research's [TurboQuant](https://arxiv.org/
 [RaBitQ](https://arxiv.org/abs/2405.12497) (Gao & Long, SIGMOD 2024) unbiased-estimator correction.
 Runs anywhere JavaScript runs — Node, browsers, Bun, Cloudflare Workers, React Native.
 
-<a href="https://npmjs.com/package/quantvec"><img src="https://img.shields.io/npm/v/quantvec.svg"></img><img src="https://img.shields.io/npm/dt/quantvec.svg"></img></a> [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+<a href="https://npmjs.com/package/quantvec"><img src="https://img.shields.io/npm/v/quantvec.svg"></a> <a href="https://npmjs.com/package/quantvec"></img><img src="https://img.shields.io/npm/dt/quantvec.svg"></img></a> [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE) <a href="https://arxiv.org/abs/2504.19874"><img src="https://img.shields.io/badge/paper-arXiv-b31b1b.svg" alt="TurboQuant paper"></a>
 
 **Add vectors, search instantly — no training, no native build, no server.**  
 7.9–15.7× smaller than float32. WASM v128 FastScan for up to ~9× faster queries.  
